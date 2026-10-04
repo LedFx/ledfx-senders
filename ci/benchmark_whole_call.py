@@ -82,16 +82,45 @@ def worker(package):
             call = lambda sender=sender, frame=frame: sender.send(frame)
         try:
             result = call()
-            loops = 0 if case.get("check_only") else (2000 if pixels < 1024 else 100)
-            begin = time.perf_counter_ns()
-            for _ in range(loops):
-                call()
-            elapsed = time.perf_counter_ns() - begin
+            loops = elapsed = warmup = 0
+            calibration = []
+            if not case.get("check_only"):
+                warmup = 100
+                for _ in range(warmup):
+                    call()
+                calibration_loops = 64
+                for _attempt in range(8):
+                    begin = time.perf_counter_ns()
+                    for _ in range(calibration_loops):
+                        call()
+                    calibration_ns = time.perf_counter_ns() - begin
+                    calibration.append(
+                        {"loops": calibration_loops, "elapsed_ns": calibration_ns}
+                    )
+                    if calibration_ns >= 10_000_000 or calibration_loops == 1_000_000:
+                        break
+                    calibration_loops = min(calibration_loops * 4, 1_000_000)
+                loops = max(
+                    1,
+                    min(
+                        1_000_000,
+                        int(150_000_000 * calibration_loops / max(1, calibration_ns)),
+                    ),
+                )
+                begin = time.perf_counter_ns()
+                for _ in range(loops):
+                    call()
+                elapsed = time.perf_counter_ns() - begin
             print(
                 json.dumps(
                     {
                         "ns": elapsed / loops if loops else None,
                         "loops": loops,
+                        "elapsed_ns": elapsed,
+                        "warmup_calls": warmup,
+                        "calibration": calibration,
+                        "target_ns": 150_000_000,
+                        "loop_cap": 1_000_000,
                         "encoded_sha256": hashlib.sha256(result).hexdigest()
                         if result is not None
                         else captured_hash,
