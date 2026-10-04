@@ -75,9 +75,14 @@ def test_opc_wire(pixels: int) -> None:
     "dtype", ["float32", "float64", ">f8", "int16", "uint64", "uint8"]
 )
 def test_numeric_policy_strides_and_alias(cls: type[Sender], dtype: str) -> None:
-    frame = np.array(
-        [[-257.9, -1.9, 256.9], [255.9, 511.2, 100.8]], dtype="float64"
-    ).astype(dtype)
+    with warnings.catch_warnings(record=True) as fixture_warnings:
+        warnings.simplefilter("always")
+        frame = np.array(
+            [[-257.9, -1.9, 256.9], [255.9, 511.2, 100.8]], dtype="float64"
+        ).astype(dtype)
+    for warning in fixture_warnings:
+        assert warning.category is RuntimeWarning
+        assert str(warning.message) == "invalid value encountered in cast"
     frame = np.repeat(frame, 2, axis=0)[::2, ::-1]
     original = frame.copy()
     sender = capture(cls, 6 if cls is DDPSender else 2)
@@ -93,11 +98,16 @@ def test_numeric_policy_strides_and_alias(cls: type[Sender], dtype: str) -> None
     for warning in oracle_warnings:
         assert warning.category is RuntimeWarning
         assert str(warning.message) == "invalid value encountered in cast"
-    if oracle_warnings:
-        with pytest.warns(RuntimeWarning, match="invalid value encountered in cast"):
-            sender.send(frame)
-    else:
+    # Native float kernels do not call NumPy's cast and must remain quiet,
+    # even on ARM NumPy versions that warn for finite out-of-byte-range values.
+    with warnings.catch_warnings(record=True) as sender_warnings:
+        warnings.simplefilter("always")
         sender.send(frame)
+    for warning in sender_warnings:
+        assert warning.category is RuntimeWarning
+        assert str(warning.message) == "invalid value encountered in cast"
+    if frame.dtype.isnative and frame.dtype.char in "Bfd":
+        assert not sender_warnings
     packet = sender._engine.captures()[0][0]
     assert packet[10 if cls is DDPSender else 4 :] == expected.tobytes()
     np.testing.assert_array_equal(frame, original)
@@ -227,11 +237,16 @@ def test_finite_boundaries(cls: type[Sender], dtype: str) -> None:
     for warning in oracle_warnings:
         assert warning.category is RuntimeWarning
         assert str(warning.message) == "invalid value encountered in cast"
-    if oracle_warnings:
-        with pytest.warns(RuntimeWarning, match="invalid value encountered in cast"):
-            sender.send(frame)
-    else:
+    # Native float kernels do not call NumPy's cast and must remain quiet,
+    # even on ARM NumPy versions that warn for finite out-of-byte-range values.
+    with warnings.catch_warnings(record=True) as sender_warnings:
+        warnings.simplefilter("always")
         sender.send(frame)
+    for warning in sender_warnings:
+        assert warning.category is RuntimeWarning
+        assert str(warning.message) == "invalid value encountered in cast"
+    if frame.dtype.isnative and frame.dtype.char in "Bfd":
+        assert not sender_warnings
     assert (
         sender._engine.captures()[0][0][10 if cls is DDPSender else 4 :]
         == expected.tobytes()
