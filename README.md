@@ -183,8 +183,8 @@ On x86_64, measured f64 OSC conversion uses runtime-guarded AVX512F/DQ/BW/VL,
 then AVX2, with portable compiler code on older CPUs. Original f64 delta masks
 use measured AVX2 or compiler code; the mask preserves three-channel pixel
 boundaries and signed-zero equality. Realtime reuses the existing DDP SIMD
-policies. No global host CPU build flags are used. Explicit NEON OSC conversion
-is a test-only candidate pending native measurements; AArch64 production uses
-the compiler route. Other dtypes and mixed/extended precision have exact
+policies. No global host CPU build flags are used. Native Linux AArch64 paired measurements select NEON OSC conversion;
+Apple Silicon retains its faster compiler route. A NEON original-mask candidate
+is measured independently before production selection. Other dtypes and mixed/extended precision have exact
 portable implementations. Hosted SIMD jobs test and measure candidates without
 silently enabling an unmeasured architecture path.

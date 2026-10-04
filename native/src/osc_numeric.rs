@@ -24,8 +24,14 @@ pub fn convert(input: &[f64], output: &mut [f32]) -> bool {
             return unsafe { x86::avx2(input, output) };
         }
     }
-    // SSE2 has no packed double truncation. AArch64's compiler loop is the
-    // production route pending paired native measurements of explicit NEON.
+    #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
+    if std::arch::is_aarch64_feature_detected!("neon") {
+        // SAFETY: runtime support checked and equal slice lengths above.
+        // Native Linux ARM paired measurements favor this; Apple favors LLVM.
+        return unsafe { arm::neon(input, output) };
+    }
+    // SSE2 lacks packed double truncation. Apple Silicon measured faster on
+    // LLVM's route than the explicit two-lane candidate.
     scalar(input, output)
 }
 #[cfg(target_arch = "x86_64")]
@@ -73,7 +79,7 @@ mod x86 {
         super::scalar(src.remainder(), dst.into_remainder()) | (valid != 255)
     }
 }
-#[cfg(all(test, target_arch = "aarch64"))]
+#[cfg(all(target_arch = "aarch64", any(test, target_os = "linux")))]
 mod arm {
     use std::arch::aarch64::*;
     #[target_feature(enable = "neon")]

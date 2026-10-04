@@ -44,6 +44,28 @@ unsafe fn avx2(a: &[f64], b: &[f64], mask: &mut [bool]) -> usize {
     }
     count + scalar(left.remainder(), right.remainder(), masks.into_remainder())
 }
+#[cfg(all(test, target_arch = "aarch64"))]
+#[target_feature(enable = "neon")]
+unsafe fn neon(a: &[f64], b: &[f64], mask: &mut [bool]) -> usize {
+    use std::arch::aarch64::*;
+    let mut count = 0;
+    let mut left = a.chunks_exact(6);
+    let mut right = b.chunks_exact(6);
+    let mut masks = mask.chunks_exact_mut(2);
+    for ((a, b), mask) in left.by_ref().zip(right.by_ref()).zip(masks.by_ref()) {
+        // SAFETY: each six-channel chunk contains two complete RGB pixels.
+        // vld3q deinterleaves the RGB triples into two-lane R/G/B vectors.
+        let (a, b) = unsafe { (vld3q_f64(a.as_ptr()), vld3q_f64(b.as_ptr())) };
+        let equal = vandq_u64(
+            vceqq_f64(a.0, b.0),
+            vandq_u64(vceqq_f64(a.1, b.1), vceqq_f64(a.2, b.2)),
+        );
+        mask[0] = vgetq_lane_u64::<0>(equal) != u64::MAX;
+        mask[1] = vgetq_lane_u64::<1>(equal) != u64::MAX;
+        count += usize::from(mask[0]) + usize::from(mask[1]);
+    }
+    count + scalar(left.remainder(), right.remainder(), masks.into_remainder())
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -58,7 +80,15 @@ mod tests {
             }
             kernels
         }
-        #[cfg(not(target_arch = "x86_64"))]
+        #[cfg(target_arch = "aarch64")]
+        {
+            let mut kernels = kernels;
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                kernels.push(("neon", |a, b, m| unsafe { neon(a, b, m) }));
+            }
+            kernels
+        }
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
         kernels
     }
     #[test]

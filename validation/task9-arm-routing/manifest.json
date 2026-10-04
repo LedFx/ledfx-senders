@@ -1,0 +1,59 @@
+{
+  "measured_commit": "039e0adacf2b9fdcaaaa1fa0fd20b88e4e2ccfbd",
+  "run": 37206750275,
+  "osc_kernel_median_us": {
+    "simd-ubuntu-24.04": {
+      "osc-f64/scalar": 240.1076991596639,
+      "osc-f64/avx2": 54.97489123443556
+    },
+    "simd-macos-15": {
+      "osc-f64/scalar": 75.64990888115592,
+      "osc-f64/neon": 111.46315158270174
+    },
+    "simd-macos-15-intel": {
+      "osc-f64/scalar": 377.82603022289385,
+      "osc-f64/avx2": 88.10267706268446
+    },
+    "simd-windows-2025": {
+      "osc-f64/scalar": 242.83234187204081,
+      "osc-f64/avx2": 55.39344707250872
+    },
+    "simd-ubuntu-24.04-arm": {
+      "osc-f64/scalar": 264.89073195603237,
+      "osc-f64/neon": 222.2044337295856
+    }
+  },
+  "members": {
+    "run.json": "a67ed0094a2f0296229f85dfceb67d4fd6260fd0cd45f902349f7b06372dcd75",
+    "simd-macos-15/mask-results.log": "f8d30a5fe8d9bc294b6ba8b6c5d1a55b444ff09cd55bd73fddec6ba702e13a2e",
+    "simd-macos-15/original-results.log": "51082b5e86b41350bb30d629a712ce1a40dee5f7624c25e9fdf7b77c5e3fb3ca",
+    "simd-macos-15/osc-simd-results.log": "dfd6fa5da5cfd16cbd7135f2c06b126fc8588c2dab26fa8f0e1394c7765ebf63",
+    "simd-macos-15/receiver-results.log": "c9c7f9bae5eb698e9348bb1910eb6d6308cb1e3fb2b69dc552a3ae31f9a02a96",
+    "simd-macos-15/simd-results.log": "12a94c732ff14bdb6efb91cc78958997afa740071e2ccbcdea1de83601bcf159",
+    "simd-macos-15-intel/mask-results.log": "011d9600d34d717ef20a6c7deeba61252822b96ce82e4544dad42fc77f60f167",
+    "simd-macos-15-intel/original-results.log": "107c286b20100178a20b1fb5abeadfb6443614782c1d914d22b078fc0fed98ab",
+    "simd-macos-15-intel/osc-simd-results.log": "5a072c8c34945f050528cc53f9db8a25ca810946da939b68fb9a10045fefbdda",
+    "simd-macos-15-intel/receiver-results.log": "fa784a72de89b08b5dcedac886cd872354ac64ad8b132a05ea8d7718d8e5117b",
+    "simd-macos-15-intel/simd-results.log": "5230d147e97825b921fcff3437409ccebf277a3113314ec55edb53a76e584638",
+    "simd-ubuntu-24.04/mask-results.log": "7f73503fb7c8da2e4e6eaa63e5da2ae773266c7f22f27f1e9af794ed844d460e",
+    "simd-ubuntu-24.04/original-results.log": "6619dc7ac65881fbe0a025129b2b10144005e448132567bdd1dd76bed01a240d",
+    "simd-ubuntu-24.04/osc-simd-results.log": "b3ae06f9455b62ef1edd2d880a4765247d7f2b140840ae9702afe8eeef2bd37d",
+    "simd-ubuntu-24.04/receiver-results.log": "889daeeda03d3e512a6889ec302426f5bf7abba1db7166bf16ce31e667e7fca8",
+    "simd-ubuntu-24.04/simd-results.log": "f1665c795a19d145b014656ae4fa272e7218f0c1f32280040977298492a6fb41",
+    "simd-ubuntu-24.04-arm/mask-results.log": "9af75909f78f5079cddaa52adf465c9676ca44a3c2cd1b94db212e892dabfe12",
+    "simd-ubuntu-24.04-arm/original-results.log": "13852ae6fffad322663c5060893570b11c9e0b4941ef14593be42ff0b68f661e",
+    "simd-ubuntu-24.04-arm/osc-simd-results.log": "51dffc5a832cf78ccd803b2874df02e85a5e5d5da5f4d5fd6d93bd7e81230042",
+    "simd-ubuntu-24.04-arm/receiver-results.log": "a67f83e725dfdcf1bbc5e126c1aaffadb03ba985844f3d3fd54f49dfc36e338f",
+    "simd-ubuntu-24.04-arm/simd-results.log": "74a55b4d9f9b3934d9b73db7beec54fdc38d24656756755747bea5869217f2de",
+    "simd-windows-2025/mask-results.log": "1618702a2765b093f605ead95bcdb2e2854ab9ee7f8db7577b8def1a132b5d1d",
+    "simd-windows-2025/original-results.log": "12ada9a672ba16d1688ce42121b1c25781693fde9bfc8a7cf5cd92a89b85cf10",
+    "simd-windows-2025/osc-simd-results.log": "2b089c4fd32d875cc9b2d6212ca038cefe0af4aaf83538d037bf5aba2c180b7d",
+    "simd-windows-2025/receiver-results.log": "e7e6c501ef0d296620110bd01253c812d34e9ae40678c1a76ce07bc4b23beb7d",
+    "simd-windows-2025/simd-results.log": "186bbf899b6e210433dfeb66e18e362713177a53f6a7d4a953911ab3d6efb8a3",
+    "arm-selection-local-osc.log": "552bbac4347b92da1d75d6092cdb0edf2816df434f38af940922db863305b78e",
+    "arm-selection-local-mask.log": "bd4e430fd82a1f7fd5442da99c407412900911c12eb381a0b62d1d07e12493c6",
+    "arm-delta-clippy.log": "32ffbdd7f6082f0454cf854b5b7f7e783644f7371fc767490f85321edb94dbb7",
+    "arm-delta-hooks.log": "c7cb2c6a5bb58d4fbc37ef843cd950dea1e344543c97e29fc5b19d1dbb79cf8c"
+  },
+  "archive_sha256": "3c2ad74a0802a7dc5a2fe372d917988e63519f0e1867dd86daeeb3b7337877bb"
+}
