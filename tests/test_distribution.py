@@ -29,5 +29,11 @@ sender = E131Sender._test_sender(ChannelLayout(3), destination='multicast', sour
 sender.send(bytes([1, 2, 3]))
 assert sender._engine.captures()[0][0][126:129] == bytes([1, 2, 3])
 sender.close(False)
+from ledfx_senders import DDPSender, OPCSender
+for cls, count in ((DDPSender, 3), (OPCSender, 1)):
+    sender = cls._test_sender(count, destination='127.0.0.1', mode='capture')
+    sender.send(bytes([1, 2, 3]))
+    assert sender._engine.captures()[0][0].endswith(bytes([1, 2, 3]))
+    sender.close()
 """
     subprocess.run([sys.executable, "-I", "-c", script], check=True, timeout=15)

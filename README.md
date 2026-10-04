@@ -89,3 +89,44 @@ acquisition paths. This verifies GIL cooperation under mutex contention, not a
 throughput claim or a scheduler-dependent number of heartbeat ticks. Production
 frame processing never consults the gate. The helper drops its guard before
 reattaching to Python, including on timeout.
+
+## DDP and OPC
+
+```python
+from ledfx_senders import DDPSender, OPCSender
+
+sender = DDPSender(300, destination="192.0.2.10", destination_id=1)
+sender.send(bytes(300))
+sender.close()
+
+opc = OPCSender(100, destination="192.0.2.10", channel=0)
+opc.send(bytes(300))
+opc.close()
+```
+
+Each sender owns its UDP socket and synchronously sends a complete frame under a
+single 200 ms socket deadline. DDP uses 1440-byte payload chunks, a final PUSH,
+and sequences starting at 2 and wrapping through 1–15. OPC sends one datagram;
+its maximum is 21,834 RGB pixels (65,506 bytes including the header).
+
+Both accept unsigned-byte buffers and NumPy arrays, including strided arrays.
+Byte buffers are channel bytes, not pixels. OPC arrays must have shape
+`(pixel_count, 3)`; finite values clamp to 0–255 and truncate. DDP retains NumPy's
+normal finite uint8 truncation/wrapping behavior. Nonfinite values are rejected
+before packet or sequence mutation. Inputs are copied into owned native storage
+before detached work; callers must not mutate a frame during its input copy.
+Close is serialized with send and is idempotent. A closed sender rejects sends.
+
+Float conversion for DDP, E1.31 and OPC validates every value while using AVX2 on supported x86-64
+CPUs, SSE2 on other x86-64 CPUs, or NEON on AArch64 (including Apple Silicon).
+Runtime feature checks guard each specialized kernel. Other targets retain a
+portable scalar implementation; ARM32 is not a supported wheel target and has
+no promised SIMD float64 path. The compile-time policy specializations preserve DDP wrapping, E1.31 strict
+(-1,256) rejection, OPC clamp/truncate, nonfinite rejection and whole-frame atomicity. There is no public unchecked input option.
+
+`Manual SIMD validation and measurements` runs native kernel equivalence tests
+and matched scalar/SIMD conversion measurements on Linux x86-64/ARM64, macOS
+Intel/ARM64 and Windows x86-64. It neither publishes nor releases anything.
+Its shared-runner measurements are conversion-only and exclude the owning
+snapshot, packet packing and Python boundary; they are not network throughput.
+See `native/bench/receiver/README.md` for independent delivered-frame measurement.

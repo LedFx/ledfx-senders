@@ -28,7 +28,7 @@ build-backend = "pdm.backend"
 [tool.pdm.build]
 run-setuptools = true
 includes = ["src/ledfx_senders"]
-source-includes = ["pdm_build.py", "native/Cargo.toml", "native/Cargo.lock", "native/src", "native/tests", "native/build.rs", "rust-toolchain.toml", "tests", "ci"]
+source-includes = ["pdm_build.py", "native/Cargo.toml", "native/Cargo.lock", "native/src", "native/tests", "native/bench", "native/build.rs", "rust-toolchain.toml", "tests", "ci"]
 excludes = ["native/target/**", "**/__pycache__/**", "**/.pytest_cache/**"]
 
 [tool.pytest.ini_options]

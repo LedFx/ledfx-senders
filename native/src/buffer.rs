@@ -8,7 +8,16 @@ use std::sync::Mutex;
 
 pub type Span = (usize, usize, usize, usize);
 
+#[derive(Clone, Copy)]
+pub enum NumericPolicy {
+    Strict,
+    Wrap,
+    Clip,
+}
+
 pub struct Banks {
+    policy: NumericPolicy,
+    payload_offset: usize,
     pub committed: Vec<Vec<u8>>,
     pub staging: Vec<Vec<u8>>,
     pub spans: Vec<Span>,
@@ -24,7 +33,20 @@ impl Banks {
         spans: Vec<Span>,
         count: usize,
     ) -> Result<Self, &'static str> {
-        if count == 0 || templates.is_empty() || templates.iter().any(|p| p.len() != 638) {
+        if templates.iter().any(|p| p.len() != 638) {
+            return Err("invalid E1.31 templates");
+        }
+        Self::with_policy(templates, spans, count, 126, NumericPolicy::Strict)
+    }
+
+    pub fn with_policy(
+        templates: Vec<Vec<u8>>,
+        spans: Vec<Span>,
+        count: usize,
+        payload_offset: usize,
+        policy: NumericPolicy,
+    ) -> Result<Self, &'static str> {
+        if count == 0 || templates.is_empty() {
             return Err("invalid templates or channel count");
         }
         let mut covered = 0;
@@ -32,7 +54,9 @@ impl Banks {
             if packet >= templates.len()
                 || input != covered
                 || len == 0
-                || slot.checked_add(len).is_none_or(|end| end > 512)
+                || slot
+                    .checked_add(len)
+                    .is_none_or(|end| end > templates[packet].len().saturating_sub(payload_offset))
                 || input.checked_add(len).is_none_or(|end| end > count)
             {
                 return Err("invalid channel span");
@@ -43,6 +67,8 @@ impl Banks {
             return Err("incomplete channel spans");
         }
         Ok(Self {
+            policy,
+            payload_offset,
             staging: templates.clone(),
             committed: templates,
             spans,
@@ -63,12 +89,27 @@ impl Banks {
                 // Accumulate validation without an early-exit dependency so LLVM
                 // can vectorize validation. NaN and infinities fail these bounds.
                 // Scratch may change on failure, but neither packet bank does.
-                let mut invalid = false;
-                for (target, &value) in self.channels.iter_mut().zip(&self.floats) {
-                    invalid |= !((value > -1.0) & (value < 256.0));
-                    *target = value as u8;
-                }
+                let invalid = match self.policy {
+                    NumericPolicy::Wrap => {
+                        crate::convert::wrap_f32(&self.floats, &mut self.channels)
+                    }
+                    NumericPolicy::Strict => {
+                        crate::convert::strict_f32(&self.floats, &mut self.channels)
+                    }
+                    NumericPolicy::Clip => {
+                        crate::convert::clip_f32(&self.floats, &mut self.channels)
+                    }
+                };
                 if invalid {
+                    if matches!(self.policy, NumericPolicy::Clip)
+                        && self
+                            .floats
+                            .iter()
+                            .find(|v| !v.is_finite())
+                            .is_some_and(|v| v.is_infinite())
+                    {
+                        return Err("infinite channel level");
+                    }
                     return Err("invalid channel level");
                 }
             }
@@ -76,12 +117,27 @@ impl Banks {
                 // Accumulate validation without an early-exit dependency so LLVM
                 // can vectorize validation. NaN and infinities fail these bounds.
                 // Scratch may change on failure, but neither packet bank does.
-                let mut invalid = false;
-                for (target, &value) in self.channels.iter_mut().zip(&self.doubles) {
-                    invalid |= !((value > -1.0) & (value < 256.0));
-                    *target = value as u8;
-                }
+                let invalid = match self.policy {
+                    NumericPolicy::Wrap => {
+                        crate::convert::wrap_f64(&self.doubles, &mut self.channels)
+                    }
+                    NumericPolicy::Strict => {
+                        crate::convert::strict_f64(&self.doubles, &mut self.channels)
+                    }
+                    NumericPolicy::Clip => {
+                        crate::convert::clip_f64(&self.doubles, &mut self.channels)
+                    }
+                };
                 if invalid {
+                    if matches!(self.policy, NumericPolicy::Clip)
+                        && self
+                            .doubles
+                            .iter()
+                            .find(|v| !v.is_finite())
+                            .is_some_and(|v| v.is_infinite())
+                    {
+                        return Err("infinite channel level");
+                    }
                     return Err("invalid channel level");
                 }
             }
@@ -93,7 +149,7 @@ impl Banks {
             &self.channels
         };
         for &(packet, input, slot, len) in &self.spans {
-            self.staging[packet][126 + slot..126 + slot + len]
+            self.staging[packet][self.payload_offset + slot..self.payload_offset + slot + len]
                 .copy_from_slice(&channels[input..input + len]);
         }
         Ok(())

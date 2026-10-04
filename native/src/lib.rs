@@ -1,5 +1,8 @@
 //! Native packet engine for the independent ledfx-senders distribution.
 pub mod buffer;
+mod convert;
+pub mod ddp;
+pub mod opc;
 pub mod sender;
 mod test_gate;
 pub mod transport;
@@ -27,6 +30,7 @@ fn engine_info(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<buffer::PacketBanks>()?;
     module.add_class::<Engine>()?;
+    module.add_class::<ddp::PacketEngine>()?;
     module.add_class::<test_gate::TestLockGate>()?;
     module.add_function(wrap_pyfunction!(engine_info, module)?)?;
     Ok(())

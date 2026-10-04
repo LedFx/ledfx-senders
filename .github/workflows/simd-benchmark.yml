@@ -1,0 +1,53 @@
+name: Manual SIMD validation and measurements
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/native-packet-senders]
+permissions:
+  contents: read
+jobs:
+  measure:
+    name: Native SIMD (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel, windows-2025]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: false
+      - name: Native platform and runtime
+        shell: bash
+        run: |
+          rustup toolchain install 1.94.0 --profile minimal
+          uv python install 3.12
+          uv python find 3.12
+          rustc --version --verbose
+          if command -v lscpu >/dev/null; then lscpu; fi
+          if command -v sysctl >/dev/null; then sysctl -a 2>/dev/null | grep -E 'machdep.cpu|hw.model|hw.ncpu' || true; fi
+      - name: Optimized paths and matched scalar control
+        shell: bash
+        working-directory: native
+        run: |
+          PYO3_PYTHON="$(uv python find 3.12)"
+          export PYO3_PYTHON
+          cargo test --locked --release --lib convert::tests
+          cargo test --locked --release --lib convert::tests::benchmark_supported_kernels -- --ignored --exact --nocapture --test-threads=1 | tee simd-results.log
+      - name: Short native receiver smoke outside the development host
+        shell: bash
+        run: |
+          PYO3_PYTHON="$(uv python find 3.12)"
+          export PYO3_PYTHON
+          cargo build --locked --release --manifest-path native/Cargo.toml --bin ledfx-receiver
+          uv run --no-project --with . --python 3.12 python ci/receiver_smoke.py | tee native/receiver-results.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: simd-${{ matrix.runner }}
+          path: |
+            native/simd-results.log
+            native/receiver-results.log

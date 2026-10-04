@@ -54,7 +54,13 @@ jobs:
           export PYO3_PYTHON
           cargo fmt --check
           cargo clippy --locked --all-targets -- -D warnings
-          cargo test --locked
+          # Keep the burst wire contract isolated from CPU-heavy SIMD tests.
+          # Its packet assertions and intentional in-test concurrency stay intact.
+          cargo test --locked --lib -- --skip transport::tests::real_socket_backends_preserve_batch_payloads
+          cargo test --locked --lib transport::tests::real_socket_backends_preserve_batch_payloads -- --exact --test-threads=1
+          cargo test --locked --bin ledfx-receiver
+          cargo build --locked --release --bin ledfx-receiver
+          "$PYO3_PYTHON" bench/receiver/test_receiver.py
 
   native-wheels:
     name: Sender library wheels (${{ matrix.target }})
