@@ -1,0 +1,228 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  UV_PYTHON: "3.12"
+
+jobs:
+  lint:
+    name: Lint and workflow security
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: false
+      - run: uv run --frozen --only-group dev prek run --all-files
+
+  native-kernel:
+    name: Native Rust contracts
+    needs: [lint]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: false
+      - name: Install native test toolchain
+        run: |
+          rustup toolchain install 1.94.0 --profile minimal --component clippy --component rustfmt
+          uv python install 3.12
+      - name: Check formatting, lints and native contracts
+        working-directory: native
+        run: |
+          PYO3_PYTHON="$(uv python find 3.12)"
+          export PYO3_PYTHON
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
+
+  native-wheels:
+    name: Sender library wheels (${{ matrix.target }})
+    needs: [lint]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: linux-x86_64
+          - runner: ubuntu-24.04-arm
+            target: linux-aarch64
+          - runner: windows-latest
+            target: windows-amd64
+          - runner: macos-15-intel
+            target: macos-x86_64
+          - runner: macos-latest
+            target: macos-arm64
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: false
+      - name: Install host native toolchain
+        if: runner.os != 'Linux'
+        run: rustup toolchain install 1.94.0 --profile minimal
+      # Linux builds and auditwheel repair occur inside pinned manylinux images.
+      # Windows/macOS repair runs with cibuildwheel's platform tools.
+      - name: Build portable sender library wheels
+        run: uvx --from cibuildwheel==4.2.1 cibuildwheel --output-dir wheelhouse
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sender-wheel-${{ matrix.target }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  native-wheel-runtime:
+    name: Installed native wheel (${{ matrix.target }}, Python ${{ matrix.python }})
+    needs: [native-wheels]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13", "3.14", "3.15", "3.14t", "3.15t"]
+        include:
+          - target: linux-x86_64
+            runner: ubuntu-latest
+          - target: linux-aarch64
+            runner: ubuntu-24.04-arm
+          - target: windows-amd64
+            runner: windows-latest
+          - target: macos-x86_64
+            runner: macos-15-intel
+          - target: macos-arm64
+            runner: macos-latest
+        target: [linux-x86_64, linux-aarch64, windows-amd64, macos-x86_64, macos-arm64]
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHON_VERSION: ${{ matrix.python }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sender-wheel-${{ matrix.target }}
+          path: wheelhouse
+      # No Rust installation or project sync: test the shipped binary itself.
+      - name: Install selected sender wheel and its dependencies
+        run: |
+          uv venv --python "$PYTHON_VERSION" wheel-venv
+          uv pip install --python wheel-venv pytest hypothesis numpy
+          uv pip install --python wheel-venv --no-index --find-links wheelhouse ledfx-senders
+      - name: Native socket, buffer, control and cleanup smoke
+        if: runner.os != 'Windows'
+        run: |
+          if [[ "$PYTHON_VERSION" == *t ]]; then
+            export LEDFX_REQUIRE_FREE_THREADING=1
+          fi
+          uv run --no-project --python wheel-venv python -I ci/native_wheel_smoke.py
+          uv run --no-project --python wheel-venv python -I -m pytest --noconftest tests -q
+          if [[ "$PYTHON_VERSION" == *t ]]; then
+            PYTHON_GIL=0 uv run --no-project --python wheel-venv python -I -X gil=0 ci/native_wheel_smoke.py
+          fi
+      - name: Native socket, buffer, control and cleanup smoke (PowerShell)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if ($env:PYTHON_VERSION.EndsWith('t')) { $env:LEDFX_REQUIRE_FREE_THREADING = '1' }
+          & ./wheel-venv/Scripts/python.exe -I ci/native_wheel_smoke.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./wheel-venv/Scripts/python.exe -I -m pytest --noconftest tests -q
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($env:PYTHON_VERSION.EndsWith('t')) {
+            $env:PYTHON_GIL = '0'
+            & ./wheel-venv/Scripts/python.exe -I -X gil=0 ci/native_wheel_smoke.py
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+  sender-package:
+    name: Assemble sender library distributions
+    needs: [lint, native-wheels]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: false
+      - name: Build one self-contained sender source distribution
+        run: uv build --sdist --out-dir sender-dist
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: sender-wheel-*
+          path: sender-dist
+          merge-multiple: true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sender-dist
+          path: sender-dist/
+          if-no-files-found: error
+
+  source-install:
+    name: Standalone source distribution
+    needs: [sender-package]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sender-dist
+          path: dist
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: false
+      - name: Build and test outside any source checkout
+        run: |
+          rustup toolchain install 1.94.0 --profile minimal
+          uv venv --python 3.12 "$RUNNER_TEMP/source-venv"
+          uv pip install --python "$RUNNER_TEMP/source-venv" dist/*.tar.gz pytest hypothesis
+          mkdir "$RUNNER_TEMP/source-tests"
+          tar -xzf dist/*.tar.gz -C "$RUNNER_TEMP/source-tests" --strip-components=1
+          cd "$RUNNER_TEMP"
+          source-venv/bin/python -I source-tests/ci/native_wheel_smoke.py
+          source-venv/bin/python -I -m pytest --noconftest source-tests/tests -q
+
+  ci-passed:
+    name: CI passed
+    if: always()
+    needs: [lint, native-kernel, native-wheels, native-wheel-runtime, sender-package, source-install]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every build and installed test to pass
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+        run: exit 1

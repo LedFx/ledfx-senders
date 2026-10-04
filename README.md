@@ -1,6 +1,6 @@
 # ledfx-senders
 
-Native packet senders for Python applications, maintained in the LedFx monorepo.
+Native packet senders for Python applications, maintained by the LedFx organization.
 The distribution contains its Rust engine, Python buffer normalization and E1.31
 setup codec. It has no LedFx application imports or dependency. NumPy is its only
 runtime dependency.
@@ -28,9 +28,9 @@ The build matrix verifies the library independently; it does not assert that the
 LedFx application's other dependencies support every interpreter. The private
 `_native` binding and `_test_*` methods are implementation and diagnostic APIs.
 
-For development, run `uv sync --group dev` at the monorepo root. The uv workspace
-installs this package locally. For an application-wheel test before the first
-library release, install from the built sender wheelhouse with `--find-links`.
+For development, run `uv sync --group dev` in this repository. For an
+application-wheel test before the first library release, install a sender wheel
+from the reviewed commit before installing the application artifact.
 CI currently builds and retains library artifacts; publication is a separate
 release decision. No existing PyPI release is assumed.
 
@@ -39,12 +39,32 @@ linker/toolchain. Installing a compatible wheel needs no Rust. From the reposito
 
 ```sh
 rustup toolchain install 1.94.0 --profile minimal
-uv build --package ledfx-senders
+uv build
 uv sync --group dev
-uv run pytest packages/ledfx-senders/tests
+uv run --group dev pytest tests
 ```
 
 The package's sdist includes its Rust sources, locked Cargo dependencies, build
 hook, independent protocol fixtures, tests, and CI smoke script. It builds outside
 the LedFx checkout. `ci/native_wheel_smoke.py` runs with isolated Python against
 an installed wheel and exercises only loopback network interfaces.
+
+## Repository automation
+
+The independent CI builds 35 portable wheel combinations: seven CPython variants
+(3.11–3.15, 3.14t and 3.15t) across Linux x86_64/ARM64, Windows AMD64, and macOS
+Intel/ARM64. Installed tests require the native engine, block LedFx imports and
+restrict network traffic to loopback. Free-threaded variants assert that NumPy
+and the binding leave the GIL disabled, including concurrent sender operations.
+The source distribution is rebuilt and tested outside a source checkout.
+Hosted results remain pending until CI runs; matrix configuration is not proof
+that a platform passed.
+
+Renovate inherits `LedFx/renovate-config`; versions are locked for development.
+Release Please maintains Python, Rust and lockfile versions together. Release
+workflows are disabled unless `ENABLE_RELEASE_AUTOMATION=true`. Before enabling
+it, maintainers must configure the org automation App, the protected `production`
+environment and PyPI trusted publishing for `publish.yml`. Publishing also needs
+an explicit tag dispatch with a successful CI run from that exact commit. No
+initial PyPI release exists or is assumed. [Source provenance](PROVENANCE.md)
+records the original repository and benchmark evidence.

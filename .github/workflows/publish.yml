@@ -1,0 +1,40 @@
+# Future release gate: disabled until trusted publishing and production approvals
+# have been configured and maintainers explicitly enable release automation.
+name: Publish verified distribution
+on:
+  workflow_dispatch:
+    inputs:
+      run-id:
+        description: Successful CI run on the release tag
+        required: true
+        type: string
+permissions: {}
+concurrency:
+  group: publish
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.repository == 'LedFx/ledfx-senders' && startsWith(github.ref, 'refs/tags/v') && vars.ENABLE_RELEASE_AUTOMATION == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - name: Verify CI run belongs to this tag commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run-id }}
+        run: |
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" > run.json
+          jq --exit-status --arg sha "$GITHUB_SHA" '.head_sha == $sha and .conclusion == "success" and .path == ".github/workflows/ci.yml" and (.event == "push" or .event == "workflow_dispatch")' run.json
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sender-dist
+          path: dist
+          run-id: ${{ inputs.run-id }}
+          github-token: ${{ github.token }}
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2

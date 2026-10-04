@@ -2,8 +2,9 @@ from collections.abc import Callable
 
 import numpy as np
 import pytest
-from ledfx_senders.e131_buffer import ChannelLayout, Frame, PacketBanks
 from numpy.typing import DTypeLike
+
+from ledfx_senders.e131_buffer import ChannelLayout, Frame, PacketBanks
 
 
 def test_owned_atomic_conversion():

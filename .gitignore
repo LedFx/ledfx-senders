@@ -1,0 +1,13 @@
+.venv/
+.pdm-build/
+__pycache__/
+.pytest_cache/
+.hypothesis/
+.ruff_cache/
+native/target/
+dist/
+wheelhouse/
+wheel-venv/
+*.so
+*.pyd
+*.egg-info/

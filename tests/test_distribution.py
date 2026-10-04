@@ -5,6 +5,7 @@ import sys
 import sysconfig
 
 import numpy  # noqa: F401 - verify dependencies do not re-enable a free-threaded GIL
+
 from ledfx_senders import _native
 
 

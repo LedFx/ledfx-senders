@@ -87,6 +87,11 @@ fn impossible_short_udp_write_is_rejected() {
 fn real_socket_backends_preserve_batch_payloads() {
     for batched in [false, true] {
         let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        // This test drains only after the full burst. Account for kernel skb
+        // overhead as well as payload bytes, independent of host defaults.
+        socket2::SockRef::from(&receiver)
+            .set_recv_buffer_size(1024 * 1024)
+            .unwrap();
         receiver
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+
 from ledfx_senders import e131_packet as codec
 
 CID = bytes(range(16))
