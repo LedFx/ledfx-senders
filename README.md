@@ -111,8 +111,14 @@ its maximum is 21,834 RGB pixels (65,506 bytes including the header).
 
 Both accept unsigned-byte buffers and NumPy arrays, including strided arrays.
 Byte buffers are channel bytes, not pixels. OPC arrays must have shape
-`(pixel_count, 3)`; finite values clamp to 0–255 and truncate. DDP retains NumPy's
-normal finite uint8 truncation/wrapping behavior. Nonfinite values are rejected
+`(pixel_count, 3)`; finite values clamp to 0–255 and truncate. DDP truncates finite floating values in
+`[-2**31, 2**31)` toward zero then takes modulo256; finite floating values outside
+that interval produce zero. Integer inputs use exact modulo256. This policy is
+identical across input formats and supported processors, preserving original
+precision at the cutoff (including longdouble). **Compatibility correction:**
+historical NumPy float-to-uint8 casts outside the byte range had platform-dependent
+undefined results; these are now deterministic, not promised to match those
+historical casts. Normal0–255 channel conversion remains unchanged. Nonfinite values are rejected
 before packet or sequence mutation. Inputs are copied into owned native storage
 before detached work; callers must not mutate a frame during its input copy.
 Close is serialized with send and is idempotent. A closed sender rejects sends.

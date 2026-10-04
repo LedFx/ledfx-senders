@@ -13,6 +13,20 @@ from ledfx_senders.packet_senders import DDPSender, OPCSender
 Sender: TypeAlias = DDPSender | OPCSender
 
 
+def numeric_oracle(frame: np.ndarray, opc: bool = False) -> bytes:
+    """Integer math from original scalar precision, never float->uint8 casts."""
+    output = bytearray()
+    for value in frame.flat:
+        integer = int(value)
+        if opc:
+            output.append(min(255, max(0, integer)))
+        elif frame.dtype.kind == "f" and not (-2147483648 <= value < 2147483648):
+            output.append(0)
+        else:
+            output.append(integer % 256)
+    return bytes(output)
+
+
 def capture(
     cls: type[Sender], count: int, *, destination_id: int = 1, channel: int = 0
 ) -> Sender:
@@ -75,41 +89,23 @@ def test_opc_wire(pixels: int) -> None:
     "dtype", ["float32", "float64", ">f8", "int16", "uint64", "uint8"]
 )
 def test_numeric_policy_strides_and_alias(cls: type[Sender], dtype: str) -> None:
-    with warnings.catch_warnings(record=True) as fixture_warnings:
-        warnings.simplefilter("always")
+    if dtype == "uint64":
+        frame = np.array([[2**64 - 257, 2**64 - 1, 256], [255, 511, 100]], dtype=dtype)
+    elif dtype == "uint8":
+        frame = np.array([[255, 255, 0], [255, 255, 100]], dtype=dtype)
+    else:
         frame = np.array(
             [[-257.9, -1.9, 256.9], [255.9, 511.2, 100.8]], dtype="float64"
         ).astype(dtype)
-    for warning in fixture_warnings:
-        assert warning.category is RuntimeWarning
-        assert str(warning.message) == "invalid value encountered in cast"
     frame = np.repeat(frame, 2, axis=0)[::2, ::-1]
     original = frame.copy()
     sender = capture(cls, 6 if cls is DDPSender else 2)
-    # NumPy's long-double cast warning is platform dependent (Windows aliases
-    # float64). Assert the exact oracle warning rather than suppressing it globally.
-    with warnings.catch_warnings(record=True) as oracle_warnings:
-        warnings.simplefilter("always")
-        expected = (
-            frame.astype(np.uint8)
-            if cls is DDPSender
-            else np.clip(frame, 0, 255).astype(np.uint8)
-        )
-    for warning in oracle_warnings:
-        assert warning.category is RuntimeWarning
-        assert str(warning.message) == "invalid value encountered in cast"
-    # Native float kernels do not call NumPy's cast and must remain quiet,
-    # even on ARM NumPy versions that warn for finite out-of-byte-range values.
-    with warnings.catch_warnings(record=True) as sender_warnings:
-        warnings.simplefilter("always")
+    expected = numeric_oracle(frame, opc=cls is OPCSender)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
         sender.send(frame)
-    for warning in sender_warnings:
-        assert warning.category is RuntimeWarning
-        assert str(warning.message) == "invalid value encountered in cast"
-    if frame.dtype.isnative and frame.dtype.char in "Bfd":
-        assert not sender_warnings
     packet = sender._engine.captures()[0][0]
-    assert packet[10 if cls is DDPSender else 4 :] == expected.tobytes()
+    assert packet[10 if cls is DDPSender else 4 :] == expected
     np.testing.assert_array_equal(frame, original)
     frame[:] = 0
     assert sender._engine.captures()[0][0] == packet
@@ -117,9 +113,10 @@ def test_numeric_policy_strides_and_alias(cls: type[Sender], dtype: str) -> None
 
 @pytest.mark.parametrize("cls", [DDPSender, OPCSender])
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
-def test_late_invalid_atomicity(cls: type[Sender], value: float) -> None:
+@pytest.mark.parametrize("dtype", ["float64", "float16", ">f8", "longdouble"])
+def test_late_invalid_atomicity(cls: type[Sender], value: float, dtype: str) -> None:
     sender = capture(cls, 3000 if cls is DDPSender else 1000)
-    frame = np.zeros((1000, 3))
+    frame = np.zeros((1000, 3), dtype=dtype)
     sender.send(frame)
     before = (
         sender._engine.captures(),
@@ -225,32 +222,11 @@ def test_finite_boundaries(cls: type[Sender], dtype: str) -> None:
         dtype=dtype,
     )
     sender = capture(cls, 9 if cls is DDPSender else 3)
-    # NumPy's long-double cast warning is platform dependent (Windows aliases
-    # float64). Assert the exact oracle warning rather than suppressing it globally.
-    with warnings.catch_warnings(record=True) as oracle_warnings:
-        warnings.simplefilter("always")
-        expected = (
-            frame.astype(np.uint8)
-            if cls is DDPSender
-            else np.clip(frame, 0, 255).astype(np.uint8)
-        )
-    for warning in oracle_warnings:
-        assert warning.category is RuntimeWarning
-        assert str(warning.message) == "invalid value encountered in cast"
-    # Native float kernels do not call NumPy's cast and must remain quiet,
-    # even on ARM NumPy versions that warn for finite out-of-byte-range values.
-    with warnings.catch_warnings(record=True) as sender_warnings:
-        warnings.simplefilter("always")
+    expected = numeric_oracle(frame, opc=cls is OPCSender)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
         sender.send(frame)
-    for warning in sender_warnings:
-        assert warning.category is RuntimeWarning
-        assert str(warning.message) == "invalid value encountered in cast"
-    if frame.dtype.isnative and frame.dtype.char in "Bfd":
-        assert not sender_warnings
-    assert (
-        sender._engine.captures()[0][0][10 if cls is DDPSender else 4 :]
-        == expected.tobytes()
-    )
+    assert sender._engine.captures()[0][0][10 if cls is DDPSender else 4 :] == expected
 
 
 @pytest.mark.parametrize("cls", [DDPSender, OPCSender])
@@ -406,3 +382,45 @@ def test_opc_preserves_first_invalid_exception(
         sender._engine.counters(),
         sender._engine.committed_copy(),
     ) == before
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float64", ">f4", ">f8", "longdouble"])
+def test_ddp_float_cutoffs_preserve_original_precision(dtype: str) -> None:
+    kind = np.dtype(dtype).type
+    lower, upper = kind(-2147483648), kind(2147483648)
+    values = [
+        kind(-1025.99),
+        kind(-1.99),
+        kind(-0.99),
+        kind(255.99),
+        kind(256.01),
+        np.nextafter(lower, kind("-inf")),
+        lower,
+        np.nextafter(lower, kind("inf")),
+        np.nextafter(upper, kind("-inf")),
+        upper,
+        np.nextafter(upper, kind("inf")),
+        kind(np.finfo(kind).max),
+    ]
+    frame = np.repeat(np.array(values, dtype=dtype), 2)[::2]
+    sender = capture(DDPSender, frame.size)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        sender.send(frame)
+    assert sender._engine.captures()[0][0][10:] == numeric_oracle(frame)
+    # The last representable value below 2**31 must not round up through f64.
+    if np.finfo(kind).nmant > np.finfo(np.float64).nmant:
+        assert sender._engine.captures()[0][0][10 + 8] == 255
+
+
+@pytest.mark.parametrize(
+    "dtype", ["float16", "float32", "float64", ">f8", "longdouble"]
+)
+def test_ddp_normal_channel_numpy_parity(dtype: str) -> None:
+    frame = np.array([0, 0.99, 1.01, 100.75, 254.99, 255], dtype=dtype)
+    sender = capture(DDPSender, frame.size)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        sender.send(frame)
+        expected = frame.astype(np.uint8).tobytes()
+    assert sender._engine.captures()[0][0][10:] == expected

@@ -47,6 +47,15 @@ def _normalize(frame: Frame, count: int, opc: bool) -> Frame:
             # Preserve the original first-invalid int() exception (NaN vs inf).
             int(numeric.ravel()[np.flatnonzero(~finite)[0]])
         raise ValueError("nonfinite channel level")
+    if not opc and dtype.kind == "f":
+        # Explicit DDP float policy, independent of undefined NumPy float->u8
+        # casts outside the byte range. Widen without losing long-double bits.
+        wide = np.asarray(frame, dtype=np.longdouble)
+        in_range = (wide >= np.longdouble(-2147483648)) & (
+            wide < np.longdouble(2147483648)
+        )
+        truncated = np.where(in_range, np.trunc(wide), np.longdouble(0))
+        frame = np.remainder(truncated, np.longdouble(256))
     return np.ascontiguousarray(
         np.clip(frame, 0, 255) if opc else frame, dtype=np.uint8
     )
