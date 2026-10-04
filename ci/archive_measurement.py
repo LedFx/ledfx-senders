@@ -8,31 +8,43 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import cast
 
 
-def digest(path):
+def hash_records(value: object) -> dict[str, str]:
+    if not isinstance(value, dict) or not all(
+        isinstance(name, str) and isinstance(digest, str)
+        for name, digest in value.items()
+    ):
+        raise TypeError("Expected a mapping of paths to hash strings")
+    return cast(dict[str, str], value)
+
+
+def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def main(verify):
+def main(verify: bool) -> None:
     root = Path(__file__).resolve().parents[1]
     archive = root / "measurement-artifacts"
     manifest = archive / "manifest.json"
     if verify:
-        records = json.loads(manifest.read_text())
-        for path, expected in records["originals"].items():
+        records: object = json.loads(manifest.read_text())
+        if not isinstance(records, dict):
+            raise TypeError("Expected an artifact manifest object")
+        for path, expected in hash_records(records["originals"]).items():
             assert digest(Path(path)) == expected, path
-        for path, expected in records["retained"].items():
+        for path, expected in hash_records(records["retained"]).items():
             assert digest(archive / path) == expected, path
-        for name, expected in json.loads(
-            (archive / "source-hashes.json").read_text()
+        for name, expected in hash_records(
+            json.loads((archive / "source-hashes.json").read_text())
         ).items():
             assert digest(root / name) == expected, name
         return
     archive.mkdir(exist_ok=True)
     originals = {}
 
-    def retain(path, name):
+    def retain(path: Path, name: str) -> None:
         path = path.resolve()
         target = archive / name
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -47,6 +59,7 @@ def main(verify):
         "ledfx_senders.original",
     ):
         loaded = importlib.import_module(module)
+        assert loaded.__file__ is not None, module
         retain(Path(loaded.__file__), "loaded/" + Path(loaded.__file__).name)
     for label in ("candidate", "control"):
         wheels = list((root / (label + "-wheels")).glob("*.whl"))

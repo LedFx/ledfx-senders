@@ -6,27 +6,46 @@ import os
 import re
 import tomllib
 from pathlib import Path
+from typing import cast
+
+
+def table(value: object) -> dict[str, object]:
+    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
+        raise TypeError("Expected a table with string keys")
+    return cast(dict[str, object], value)
+
+
+def package_version(value: object) -> str:
+    version = table(value)["version"]
+    if not isinstance(version, str):
+        raise TypeError("Expected a string package version")
+    return version
 
 
 def release_plan(root: Path, event: str, repository: str, ref: str) -> tuple[str, bool]:
-    def toml(name: str) -> dict:
+    def toml(name: str) -> dict[str, object]:
         return tomllib.loads((root / name).read_text())
 
-    version = toml("pyproject.toml")["project"]["version"]
+    version = package_version(toml("pyproject.toml")["project"])
     if not isinstance(version, str) or not re.fullmatch(
         r"[0-9][0-9A-Za-z.+-]*", version
     ):
         raise ValueError("Invalid project version")
-    versions = {"native/Cargo.toml": toml("native/Cargo.toml")["package"]["version"]}
+    versions = {
+        "native/Cargo.toml": package_version(toml("native/Cargo.toml")["package"])
+    }
     for name in ("uv.lock", "native/Cargo.lock"):
+        packages = toml(name)["package"]
+        if not isinstance(packages, list):
+            raise TypeError(f"{name}: expected a package array")
         matches = [
-            p["version"] for p in toml(name)["package"] if p["name"] == "ledfx-senders"
+            package_version(p) for p in packages if table(p)["name"] == "ledfx-senders"
         ]
         if len(matches) != 1:
             raise ValueError(f"{name}: expected one ledfx-senders version")
         versions[name] = matches[0]
     module = ast.parse((root / "src/ledfx_senders/__init__.py").read_text())
-    declared = [
+    declared: list[object] = [
         ast.literal_eval(node.value)
         for node in module.body
         if isinstance(node, ast.Assign)
@@ -34,10 +53,15 @@ def release_plan(root: Path, event: str, repository: str, ref: str) -> tuple[str
     ]
     if len(declared) != 1:
         raise ValueError("Expected one Python package version")
+    if not isinstance(declared[0], str):
+        raise TypeError("Expected a string Python package version")
     versions["src/ledfx_senders/__init__.py"] = declared[0]
-    versions[".release-please-manifest.json"] = json.loads(
-        (root / ".release-please-manifest.json").read_text()
+    manifest_version = table(
+        json.loads((root / ".release-please-manifest.json").read_text())
     )["."]
+    if not isinstance(manifest_version, str):
+        raise TypeError("Expected a string release manifest version")
+    versions[".release-please-manifest.json"] = manifest_version
     for name, actual in versions.items():
         if actual != version:
             raise ValueError(

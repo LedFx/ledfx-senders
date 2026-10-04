@@ -48,8 +48,8 @@ jobs:
         with:
           enable-cache: false
       - run: uv run --frozen --only-group dev prek run --all-files
-      - name: Release event and version guard regressions
-        run: uv run --frozen --only-group dev python -m pytest ci/test_release_guard.py -q
+      - name: Release and Python quality guard regressions
+        run: uv run --frozen --only-group dev python -m pytest ci -q
 
   native-kernel:
     name: Native Rust contracts

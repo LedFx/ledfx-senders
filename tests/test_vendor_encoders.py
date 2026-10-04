@@ -30,7 +30,7 @@ def test_adalight_one_pixel_receiver_count(order: str, payload: bytes) -> None:
     )
 
 
-def test_adalight_back_to_back_stream_receiver():
+def test_adalight_back_to_back_stream_receiver() -> None:
     # Adafruit b9d88f8a LEDstream.pde lines 183-189: count is inclusive.
     frames = [
         np.array([[1, 2, 3]], dtype=np.uint8),
@@ -53,7 +53,7 @@ def test_adalight_back_to_back_stream_receiver():
     assert not pending
 
 
-def test_openrgb_literal_v3_packet():
+def test_openrgb_literal_v3_packet() -> None:
     got = vendor.encode_openrgb(
         np.array([[17, 34, 51], [68, 85, 102]], dtype=np.uint8), 0x12345678
     )
@@ -62,7 +62,7 @@ def test_openrgb_literal_v3_packet():
     )
 
 
-def test_hue_literal_ascii_uuid_and_duplicate_components():
+def test_hue_literal_ascii_uuid_and_duplicate_components() -> None:
     got = vendor.encode_hue(
         np.array([[-0.9, 34.9, 255.9]]),
         "12345678-1234-1234-1234-123456789abc",
@@ -159,7 +159,7 @@ def test_rejects_non_rgb_and_unsupported_formats(frame: Frame) -> None:
         vendor.encode_adalight(frame, "RGB")
 
 
-def test_wrap_policy_is_explicit_and_integers_keep_low_bits():
+def test_wrap_policy_is_explicit_and_integers_keep_low_bits() -> None:
     values = np.array([[-1.9, 256.9, 257.9], [-(2**31), 2**31, 1e300]])
     assert vendor.encode_adalight(values, "RGB")[6:] == b"\xff\0\1\0\0\0"
     values = np.array([[2**64 - 1, 2**63 + 1, 256]], dtype=np.uint64)
@@ -169,7 +169,7 @@ def test_wrap_policy_is_explicit_and_integers_keep_low_bits():
             vendor.encode_govee(np.array([[1, 2, bad]]), False)
 
 
-def test_openrgb_count_and_lengths_decode_independently():
+def test_openrgb_count_and_lengths_decode_independently() -> None:
     packet = vendor.encode_openrgb(bytes(3 * 257), 23)
     assert struct.unpack_from("<III", packet, 4) == (23, 1050, 1034)
     assert struct.unpack_from("<IH", packet, 16) == (1034, 257)

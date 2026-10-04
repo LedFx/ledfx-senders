@@ -14,7 +14,7 @@ from pathlib import Path
 BINARY = Path(__file__).resolve().parents[2] / "target/release/ledfx-receiver"
 
 
-def packet(protocol, identity, index=0):
+def packet(protocol: str, identity: int, index: int = 0) -> bytes | bytearray:
     chunk = 1440 if protocol == "ddp" else 510
     size = chunk if index == 0 else 3
     data = bytearray([7] * size)
@@ -45,7 +45,7 @@ def packet(protocol, identity, index=0):
 
 
 class ReceiverTests(unittest.TestCase):
-    def test_stateful_literal_receipts_on_both_backends(self):
+    def test_stateful_literal_receipts_on_both_backends(self) -> None:
         for backend in ["portable", "batched"]:
             for protocol in [
                 "osc-one",
@@ -77,6 +77,7 @@ class ReceiverTests(unittest.TestCase):
                         text=True,
                     )
                     try:
+                        assert receiver.stdout is not None
                         ready = json.loads(receiver.stdout.readline())
                         if is_osc:
                             width = (
@@ -128,7 +129,7 @@ class ReceiverTests(unittest.TestCase):
                             receiver.kill()
                             receiver.communicate()
 
-    def test_e131_mixed_cid_never_completes(self):
+    def test_e131_mixed_cid_never_completes(self) -> None:
         for backend in ["portable", "batched"]:
             with (
                 self.subTest(backend=backend),
@@ -144,13 +145,14 @@ class ReceiverTests(unittest.TestCase):
                     text=True,
                 )
                 try:
+                    assert receiver.stdout is not None
                     ready = json.loads(receiver.stdout.readline())
                     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
                         destination = ("127.0.0.1", ready["port"])
-                        first = packet("e131", 1, 0)
+                        first = bytearray(packet("e131", 1, 0))
                         first[22:38] = bytes([1] * 16)
                         sender.sendto(first, destination)
-                        second = packet("e131", 1, 1)
+                        second = bytearray(packet("e131", 1, 1))
                         second[22:38] = bytes([2] * 16)
                         sender.sendto(second, destination)
                         # All three control variants use the wrong CID too.
@@ -181,7 +183,7 @@ class ReceiverTests(unittest.TestCase):
                         receiver.kill()
                         receiver.communicate()
 
-    def test_wire_controls_on_both_receive_backends(self):
+    def test_wire_controls_on_both_receive_backends(self) -> None:
         for backend in ["portable", "batched"]:
             for protocol in ["ddp", "e131", "opc"]:
                 with (
@@ -206,6 +208,7 @@ class ReceiverTests(unittest.TestCase):
                         text=True,
                     )
                     try:
+                        assert receiver.stdout is not None
                         ready = json.loads(receiver.stdout.readline())
                         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
                             destination = ("127.0.0.1", ready["port"])

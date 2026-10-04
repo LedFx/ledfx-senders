@@ -30,7 +30,7 @@ def test_independent_official_layout(version: int, expected: str) -> None:
     s.close()
 
 
-def test_clipping_avoids_platform_dependent_int_overflow():
+def test_clipping_avoids_platform_dependent_int_overflow() -> None:
     s = sender(2, (23,))
     s.send(np.array([[-1e300, 255.9, 1e300]]))
     assert s._engine.captures()[0][0] == bytes.fromhex("0001001700ffff000000")
@@ -78,7 +78,7 @@ def test_full_datagram_boundary_without_ip_fragment_delivery(
     s.close()
 
 
-def test_actual_loopback_delivery_and_close():
+def test_actual_loopback_delivery_and_close() -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as receiver:
         receiver.bind(("127.0.0.1", 0))
         receiver.settimeout(1)

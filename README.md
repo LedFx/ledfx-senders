@@ -28,26 +28,47 @@ The build matrix verifies the library independently; it does not assert that the
 LedFx application's other dependencies support every interpreter. The private
 `_native` binding and `_test_*` methods are implementation and diagnostic APIs.
 
-For development, run `uv sync --group dev` in this repository. For an
-application-wheel test before the first library release, install a sender wheel
-from the reviewed commit before installing the application artifact.
-CI currently builds and retains library artifacts; publication is a separate
-release decision. No existing PyPI release is assumed.
+## Installation and development
 
-Source builds require Rust 1.94.0 (pinned in `rust-toolchain.toml`) and the host C
-linker/toolchain. Installing a compatible wheel needs no Rust. From the repository:
+Applications consume the separately published Python package. To require a
+compatible wheel and prevent a fallback Rust source build:
+
+```sh
+python -m pip install --only-binary=ledfx-senders ledfx-senders
+```
+
+This command requires a published version with a wheel for your interpreter and
+platform. Release configuration does not itself mean a release exists; check
+[PyPI](https://pypi.org/project/ledfx-senders/) for availability. Application
+repositories do not need Rust, a source checkout, or a build bootstrap script.
+
+The supported wheel targets are Linux x86-64 and AArch64 (glibc), Windows x86-64,
+and macOS Intel and ARM64. There are no Windows ARM64, 32-bit ARM/x86, or musl
+wheel targets. A wheel must match both the Python ABI and platform; free-threaded
+Python uses its separate `t` ABI. Wheels include `py.typed` and `_native.pyi` for
+type checkers, and installed-wheel tests check that both files are distributed.
+
+Contributors building this repository need Rust 1.94.0 (pinned in
+`rust-toolchain.toml`) and a host C linker/toolchain. Builds use PDM's setuptools
+hook with setuptools-rust and locked Cargo dependencies, not a workspace in the
+LedFx application. From the repository:
 
 ```sh
 rustup toolchain install 1.94.0 --profile minimal
+uv sync --locked --group dev
+uv run --locked --group dev python -m pytest tests ci
+uv run --frozen --only-group dev --python 3.12 python ci/check_types.py
+uv run --frozen --only-group dev ruff check .
+uv run --frozen --only-group dev ruff format --check .
+uv run --frozen --only-group dev prek run --all-files
 uv build
-uv sync --group dev
-uv run --group dev pytest tests
 ```
 
-The package's sdist includes its Rust sources, locked Cargo dependencies, build
-hook, independent protocol fixtures, tests, and CI smoke script. It builds outside
-the LedFx checkout. `ci/native_wheel_smoke.py` runs with isolated Python against
-an installed wheel and exercises only loopback network interfaces.
+The sdist contains the Rust sources, locked Cargo dependencies, build hook,
+independent protocol fixtures, tests and CI scripts. It builds outside a LedFx
+checkout. `ci/native_wheel_smoke.py` runs with isolated Python against an installed
+wheel and restricts network tests to loopback. Benchmark scripts are development
+tools, not installed public APIs; their measurements are not release gates.
 
 ## Repository automation
 
@@ -57,13 +78,21 @@ Intel/ARM64. Installed tests require the native engine, block LedFx imports and
 restrict network traffic to loopback. Free-threaded variants assert that NumPy
 and the binding leave the GIL disabled, including concurrent sender operations.
 The source distribution is rebuilt and tested outside a source checkout.
-Hosted results remain pending until CI runs; matrix configuration is not proof
-that a platform passed.
+The [CI run for the release-workflow checkpoint](https://github.com/LedFx/ledfx-senders/actions/runs/37240196477)
+passed the complete portable matrix. Each new commit must pass its own applicable
+checks; the workflow definition alone is not evidence that a build passed.
 
-Strict Pyrefly checks all Python source, native stubs and tests without a baseline
-or suppressions: `uv run --frozen --only-group dev --python 3.12 python ci/check_types.py`.
-Its source search paths also include the independent test oracle. NumPy is in the
-dev group so this gate resolves its types without building the native library.
+Strict Pyrefly checks every maintained Python file and stub, including package
+source, tests, CI scripts, the PDM build hook and receiver checks, without a
+baseline or suppressions: `uv run --frozen --only-group dev --python 3.12 python ci/check_types.py`.
+Recursive project globs include future directories; generated, hidden and virtual
+environment directories use the checker defaults. Ruff enables the complete ANN
+rule family to require parameter and return annotations and reject explicit Any.
+A regression inserts untyped files across those directories and verifies that
+both gates reject them. These are static-checking guarantees, not a measured
+percentage of expression-level type coverage. NumPy and setuptools-rust are in
+the dev group so the gate resolves array and build-hook types without compiling
+the native library.
 Installed runtime jobs create their environments and run under the runner temp
 directory, while referring to scripts and fixtures by absolute checkout paths.
 
@@ -122,16 +151,20 @@ its maximum is 21,834 RGB pixels (65,506 bytes including the header).
 Both accept unsigned-byte buffers and NumPy arrays, including strided arrays.
 Byte buffers are channel bytes, not pixels. OPC arrays must have shape
 `(pixel_count, 3)`; finite values clamp to 0–255 and truncate. DDP truncates finite floating values in
-`[-2**31, 2**31)` toward zero then takes modulo256; finite floating values outside
-that interval produce zero. Integer inputs use exact modulo256. This policy is
+`[-2**31, 2**31)` toward zero then takes modulo 256; finite floating values outside
+that interval produce zero. Integer inputs use exact modulo 256. This policy is
 identical across input formats and supported processors, preserving original
 precision at the cutoff (including longdouble). **Compatibility correction:**
 historical NumPy float-to-uint8 casts outside the byte range had platform-dependent
 undefined results; these are now deterministic, not promised to match those
-historical casts. Normal0–255 channel conversion remains unchanged. Nonfinite values are rejected
+historical casts. Normal 0–255 channel conversion remains unchanged. Nonfinite values are rejected
 before packet or sequence mutation. Inputs are copied into owned native storage
 before detached work; callers must not mutate a frame during its input copy.
-Close is serialized with send and is idempotent. A closed sender rejects sends.
+Close is serialized with send and is idempotent. A closed sender rejects sends. DDP advances
+its sequence once per validated send attempt, including a socket failure before
+any packet is accepted. Invalid input does not advance it, and a failed payload
+does not replace the committed frame. Do not assume sequence rollback semantics
+are identical across protocols.
 
 Float conversion for DDP, E1.31 and OPC validates every value while using AVX512F/DQ/BW/VL or AVX2 on supported x86-64
 CPUs, SSE2 on other x86-64 CPUs, or NEON on AArch64 (including Apple Silicon).
@@ -146,8 +179,9 @@ no promised SIMD float64 path. The compile-time policy specializations preserve 
 `Manual SIMD validation and measurements` runs native kernel equivalence tests
 and matched scalar/SIMD conversion measurements on Linux x86-64/ARM64, macOS
 Intel/ARM64 and Windows x86-64. It neither publishes nor releases anything.
-Its shared-runner measurements are conversion-only and exclude the owning
-snapshot, packet packing and Python boundary; they are not network throughput.
+It reports separate conversion-only kernels and public-facade whole-call pairs.
+Kernel timings exclude the owning snapshot, packet packing and Python boundary;
+whole-call timings include them. Neither is network or physical-device throughput.
 See `native/bench/receiver/README.md` for independent delivered-frame measurement.
 
 ## Stateful OSC and UDP realtime
@@ -252,6 +286,22 @@ channel_ids, sequence)`, and `encode_govee(frame, stretch)`. Each returns owned
 socket session. `RGBGather(permutation).encode(frame)` caches an immutable RGB
 permutation for SDK-owned streaming; it does not implement SDK transport.
 
+For example, encoding bytes does not open or negotiate a device session:
+
+```python
+from ledfx_senders.encoders import RGBGather, encode_adalight, encode_openrgb
+
+frame = bytes([255, 0, 0, 0, 128, 255])  # two RGB pixels
+serial_packet = encode_adalight(frame, "RGB")
+openrgb_packet = encode_openrgb(frame, device_id=0)
+reordered_rgb = RGBGather((1, 0)).encode(frame)
+```
+
+Callers negotiate OpenRGB protocol v3 and write the result to their own session.
+All encoders take an owned snapshot; callers must not mutate input while the
+snapshot is taken. Hue accepts 1..256 channels and RGBGather accepts 1..1,000,000
+pixels with a complete immutable permutation.
+
 Inputs are RGB ndarrays of shape `(N, 3)` or contiguous unsigned byte buffers.
 Strided arrays are normalized; complex/object/structured arrays are rejected.
 Adalight, OpenRGB, Govee and RGBGather preserve integer low bytes. Finite floats
@@ -287,15 +337,30 @@ The [manufacturer's API documentation](https://nanoleaf.atlassian.net/wiki/space
 capacity is not a firmware or hardware-rate claim. Large datagrams are tested
 for encoding bounds separately from small loopback delivery.
 
-The new encoders reuse previously measured float conversion dispatch. Provisional
-portable packing routes use preallocated output at 128+ pixels for Adalight on
-measured Linux/Windows/macOS x86-64 and Linux/macOS ARM64, and for OpenRGB except
-macOS x86-64. Art-Net caches its short-copy route for groups of at most 32 channel
-bytes on those x86-64 platforms. Ordinary/long spans, ARM64 Art-Net, tiny vendor
-frames and unmeasured architectures retain reference packing. These are compiler
-loops, not new explicit ISA intrinsics; final whole-call crossover measurements
-must confirm or reject the provisional cutoffs. Losing controls remain in the
-paired benchmark. No 32-bit ARM execution or performance validation is claimed.
+The encoders reuse the validated float-conversion dispatch. Accepted portable
+packing routes use preallocated output at 128+ pixels for non-identity Adalight
+orders on tested Linux/Windows/macOS x86-64 and Linux/macOS ARM64, and for OpenRGB
+except macOS x86-64. Adalight's RGB order uses a generic identity copy, avoiding
+an unnecessary permutation. Art-Net caches a short-copy route for groups of at
+most 32 channel bytes on those x86-64 platforms. Ordinary/long spans, ARM64
+Art-Net, small vendor frames and unmeasured architectures retain reference
+packing. These are compiler loops, not new explicit ISA intrinsics.
+
+The [calibrated five-platform whole-call run](https://github.com/LedFx/ledfx-senders/actions/runs/37236053291)
+retained paired distributions and unchanged controls. It supports those
+conservative categories, not an optimal 128-pixel crossover or a win in every
+cell. Small differences within shared-runner variation remain inconclusive;
+losing and near-equal observations are retained. Hosted Adalight permutation
+measurements used BRG; subsequent RGB cases are labeled separately. No 32-bit
+ARM execution or performance validation is claimed.
+
+Owning snapshots, shape/numeric validation and conversion have a cost. A brief
+matched LedFx default-RGB check at 50,000 pixels found uint8 near parity after
+the identity-copy repair, but float64 throughput remained about 0.38 times the
+historical NumPy encoder. This is a retained regression, not a sustained
+whole-application result. The compared contracts differ in validation and
+ownership; individual cost shares were not isolated. No blanket speedup is
+claimed for every dtype, frame size or caller.
 
 The benchmark-only `ledfx-receiver ddp-structural <pixels> <portable|batched>
 <loopback-address>` receives arbitrary RGB effect data without modifying it.

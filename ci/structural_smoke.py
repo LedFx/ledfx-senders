@@ -8,9 +8,40 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
+from typing import TypedDict, cast
 
 
-def main():
+class ReceiverMessage(TypedDict, total=False):
+    port: int
+    unique_identity: bool
+    counts: list[int]
+    incomplete_assembly_events: int
+    elapsed_seconds: float
+
+
+def decode_message(line: str) -> ReceiverMessage:
+    value: object = json.loads(line)
+    if not isinstance(value, dict):
+        raise TypeError("Expected a receiver object")
+    for key in ("port", "incomplete_assembly_events"):
+        if key in value and not isinstance(value[key], int):
+            raise TypeError(f"Invalid receiver field: {key}")
+    if "unique_identity" in value and not isinstance(value["unique_identity"], bool):
+        raise TypeError("Invalid unique_identity")
+    if "counts" in value:
+        counts = value["counts"]
+        if not isinstance(counts, list) or not all(
+            isinstance(item, int) for item in counts
+        ):
+            raise TypeError("Invalid receiver counts")
+    if "elapsed_seconds" in value and not isinstance(
+        value["elapsed_seconds"], (float, int)
+    ):
+        raise TypeError("Invalid elapsed_seconds")
+    return cast(ReceiverMessage, value)
+
+
+def main() -> None:
     suffix = ".exe" if sys.platform == "win32" else ""
     binary = (
         Path(__file__).resolve().parents[1]
@@ -24,17 +55,20 @@ def main():
         stderr=subprocess.PIPE,
         text=True,
     )
-    messages = queue.Queue()
+    assert process.stdout is not None and process.stdin is not None
+    output = process.stdout
+    input_pipe = process.stdin
+    messages: queue.Queue[str] = queue.Queue()
     threading.Thread(
-        target=lambda: [messages.put(line) for line in process.stdout], daemon=True
+        target=lambda: [messages.put(line) for line in output], daemon=True
     ).start()
 
-    def read():
-        return json.loads(messages.get(timeout=5))
+    def read() -> ReceiverMessage:
+        return decode_message(messages.get(timeout=5))
 
-    def command(text):
-        process.stdin.write(text + "\n")
-        process.stdin.flush()
+    def command(text: str) -> ReceiverMessage:
+        input_pipe.write(text + "\n")
+        input_pipe.flush()
         return read()
 
     try:

@@ -7,14 +7,44 @@ import random
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import NotRequired, TypedDict, cast
 
 
-def digest(path):
+class Case(TypedDict):
+    protocol: str
+    pixels: int
+    dtype: str
+    order: NotRequired[str]
+    group: NotRequired[int]
+    white: NotRequired[str]
+    check_only: NotRequired[bool]
+
+
+def decode_case(line: str) -> Case:
+    value: object = json.loads(line)
+    if not isinstance(value, dict):
+        raise TypeError("Expected a benchmark case object")
+    for key, expected in (("protocol", str), ("pixels", int), ("dtype", str)):
+        if not isinstance(value.get(key), expected):
+            raise TypeError(f"Invalid benchmark case field: {key}")
+    for key, expected in (
+        ("order", str),
+        ("group", int),
+        ("white", str),
+        ("check_only", bool),
+    ):
+        if key in value and not isinstance(value[key], expected):
+            raise TypeError(f"Invalid benchmark case field: {key}")
+    return cast(Case, value)
+
+
+def digest(path: str | Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def worker(package):
+def worker(package: str) -> None:
     sys.path.insert(0, str(Path(package).resolve()))
     import numpy as np
 
@@ -29,7 +59,7 @@ def worker(package):
                 "numpy": np.__version__,
                 "script_sha256": digest(__file__),
                 "loaded": {
-                    str(p): digest(p)
+                    p: digest(p)
                     for p in (
                         _native.__file__,
                         encoders.__file__,
@@ -41,10 +71,11 @@ def worker(package):
         flush=True,
     )
     for line in sys.stdin:
-        case = json.loads(line)
+        case = decode_case(line)
         pixels = case["pixels"]
         frame = (np.arange(pixels * 3).reshape(pixels, 3) % 256).astype(case["dtype"])
-        sender = None
+        sender: ArtNetSender | None = None
+        call: Callable[[], bytes | None]
         captured_hash = None
         if case["protocol"] == "adalight":
             order = case["order"]
@@ -54,22 +85,28 @@ def worker(package):
         elif case["protocol"] == "openrgb":
             call = lambda frame=frame: encoders.encode_openrgb(frame, 0)
         else:
-            settings = {
-                "destination": "127.0.0.1",
-                "port": 6454,
-                "universe": 0,
-                "packet_size": 512,
-                "even_packet_size": True,
-                "dmx_start_address": 9,
-                "pixel_count": pixels,
-                "pixels_per_device": case["group"],
-                "pre_amble": b"\xff\x80",
-                "post_amble": b"\x40",
-                "rgb_order": "BRG",
-                "white_mode": case["white"],
-                "broadcast": False,
-            }
-            capture = ArtNetSender._test_sender(**settings, mode="capture")
+
+            def make_sender(
+                mode: str, *, pixels: int = pixels, case: Case = case
+            ) -> ArtNetSender:
+                return ArtNetSender._test_sender(
+                    destination="127.0.0.1",
+                    port=6454,
+                    universe=0,
+                    packet_size=512,
+                    even_packet_size=True,
+                    dmx_start_address=9,
+                    pixel_count=pixels,
+                    pixels_per_device=case["group"],
+                    pre_amble=b"\xff\x80",
+                    post_amble=b"\x40",
+                    rgb_order="BRG",
+                    white_mode=case["white"],
+                    broadcast=False,
+                    mode=mode,
+                )
+
+            capture = make_sender("capture")
             try:
                 capture.send(frame)
                 packets = capture._engine.captures()
@@ -81,7 +118,7 @@ def worker(package):
                 captured_hash = packet_digest.hexdigest()
             finally:
                 capture.close()
-            sender = ArtNetSender._test_sender(**settings, mode="discard")
+            sender = make_sender("discard")
             call = lambda sender=sender, frame=frame: sender.send(frame)
         try:
             result = call()
@@ -136,8 +173,8 @@ def worker(package):
                 sender.close()
 
 
-def run(control, candidate, check_only=False):
-    processes = {}
+def run(control: str, candidate: str, check_only: bool = False) -> None:
+    processes: dict[str, subprocess.Popen[str]] = {}
     try:
         for label, package in (("control", control), ("candidate", candidate)):
             process = subprocess.Popen(
@@ -146,6 +183,7 @@ def run(control, candidate, check_only=False):
                 stdout=subprocess.PIPE,
                 text=True,
             )
+            assert process.stdout is not None
             processes[label] = process
             print(
                 json.dumps(
@@ -156,7 +194,7 @@ def run(control, candidate, check_only=False):
                 ),
                 flush=True,
             )
-        cases = []
+        cases: list[Case] = []
         for protocol in ("adalight", "openrgb"):
             for pixels in (1, 30, 127, 128, 129, 170, 1024, 50000):
                 for dtype in ("uint8", "float64"):
@@ -201,6 +239,7 @@ def run(control, candidate, check_only=False):
                 hashes = []
                 for label in labels:
                     process = processes[label]
+                    assert process.stdin is not None and process.stdout is not None
                     process.stdin.write(json.dumps(case) + "\n")
                     process.stdin.flush()
                     result = json.loads(process.stdout.readline())

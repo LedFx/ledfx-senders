@@ -115,7 +115,7 @@ def test_logical_stride_separate_from_wire_padding(size: int, even: bool) -> Non
         assert payload == chunk + bytes(wire - len(chunk))
 
 
-def test_groups_offset_ambles_drop_incomplete_tail():
+def test_groups_offset_ambles_drop_incomplete_tail() -> None:
     frame = np.arange(15, dtype=np.uint8).reshape(5, 3)
     s = sender(
         5,
@@ -135,7 +135,7 @@ def test_groups_offset_ambles_drop_incomplete_tail():
     assert all(p[5:] == b"\0" for p in packets)
 
 
-def test_sequence_wrap_and_full_blackout():
+def test_sequence_wrap_and_full_blackout() -> None:
     s = sender(86, packet_size=1)
     s.send(np.ones((86, 3), dtype=np.uint8))
     receipts = [decode(p) for p, _ in s._engine.captures()]

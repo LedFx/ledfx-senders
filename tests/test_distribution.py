@@ -3,19 +3,20 @@
 import subprocess
 import sys
 import sysconfig
+from importlib.resources import files
 
 import numpy  # noqa: F401 - verify dependencies do not re-enable a free-threaded GIL
 
 from ledfx_senders import _native
 
 
-def test_import_does_not_enable_gil():
+def test_import_does_not_enable_gil() -> None:
     if sysconfig.get_config_var("Py_GIL_DISABLED"):
         assert not getattr(sys, "_is_gil_enabled", lambda: True)()
     assert _native.engine_info()["profile"] == "release"
 
 
-def test_application_imports_are_not_needed():
+def test_application_imports_are_not_needed() -> None:
     script = """
 import importlib.abc, sys
 class BlockApplication(importlib.abc.MetaPathFinder):
@@ -47,3 +48,9 @@ for sender in (osc,rt):
     sender.close()
 """
     subprocess.run([sys.executable, "-I", "-c", script], check=True, timeout=15)
+
+
+def test_installed_distribution_includes_public_typing() -> None:
+    package = files("ledfx_senders")
+    assert package.joinpath("py.typed").is_file()
+    assert package.joinpath("_native.pyi").is_file()
