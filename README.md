@@ -119,6 +119,9 @@ Close is serialized with send and is idempotent. A closed sender rejects sends.
 
 Float conversion for DDP, E1.31 and OPC validates every value while using AVX512F/DQ/BW/VL or AVX2 on supported x86-64
 CPUs, SSE2 on other x86-64 CPUs, or NEON on AArch64 (including Apple Silicon).
+AArch64 uses measured policy/dtype choices: explicit NEON for DDP and E1.31
+float64, compiler-vectorized loops for E1.31/OPC float32, and a compiler-optimized
+OPC float64 loop with SIMD validation and scalar conversion.
 Runtime feature checks guard each specialized kernel. Other targets retain a
 portable scalar implementation; ARM32 is not a supported wheel target and has
 no promised SIMD float64 path. The compile-time policy specializations preserve DDP wrapping, E1.31 strict

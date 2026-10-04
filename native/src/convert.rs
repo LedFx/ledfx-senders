@@ -30,6 +30,12 @@ fn dispatch_f32<const POLICY: u8>(input: &[f32], output: &mut [u8]) -> bool {
         // SAFETY: checked feature and equal slice lengths.
         return unsafe { x86::f32_sse2::<POLICY>(input, output) };
     }
+    // On native Linux ARM and Apple Silicon, LLVM's wider vectorized loop
+    // beats the explicit four-lane kernel for Strict/Clip (see hosted receipts).
+    #[cfg(target_arch = "aarch64")]
+    if POLICY != 0 {
+        return scalar_f32::<POLICY>(input, output);
+    }
     #[cfg(target_arch = "aarch64")]
     if std::arch::is_aarch64_feature_detected!("neon") {
         // SAFETY: checked feature and equal slice lengths.
@@ -53,6 +59,12 @@ fn dispatch_f64<const POLICY: u8>(input: &[f64], output: &mut [u8]) -> bool {
     if std::arch::is_x86_feature_detected!("sse2") {
         // SAFETY: checked feature and equal slice lengths.
         return unsafe { x86::f64_sse2::<POLICY>(input, output) };
+    }
+    // Clip's compiler loop uses SIMD validation plus scalar conversion and
+    // wins native ARM trials against the explicit packed f64 kernel.
+    #[cfg(target_arch = "aarch64")]
+    if POLICY == 2 {
+        return scalar_f64::<POLICY>(input, output);
     }
     #[cfg(target_arch = "aarch64")]
     if std::arch::is_aarch64_feature_detected!("neon") {
@@ -335,8 +347,35 @@ mod x86 {
 mod arm {
     use std::arch::aarch64::*;
 
+    // The original two-lane Strict f64 loop beats both the revised packed
+    // kernel and LLVM's loop on native Linux ARM and Apple Silicon. Keep only
+    // this measured specialization, not a duplicate full policy implementation.
+    #[target_feature(enable = "neon")]
+    unsafe fn strict_f64_neon(input: &[f64], output: &mut [u8]) -> bool {
+        let mut inputs = input.chunks_exact(2);
+        let mut outputs = output.chunks_exact_mut(2);
+        let mut finite = u64::MAX;
+        for (input, output) in inputs.by_ref().zip(outputs.by_ref()) {
+            // SAFETY: exact two-value chunk and unaligned loads permitted.
+            let v = unsafe { vld1q_f64(input.as_ptr()) };
+            let valid = vandq_u64(
+                vcgtq_f64(v, vdupq_n_f64(-1.0)),
+                vcltq_f64(v, vdupq_n_f64(256.0)),
+            );
+            finite &= vgetq_lane_u64::<0>(valid) & vgetq_lane_u64::<1>(valid);
+            let integers = vreinterpretq_u64_s64(vcvtq_s64_f64(v));
+            output[0] = vgetq_lane_u64::<0>(integers) as u8;
+            output[1] = vgetq_lane_u64::<1>(integers) as u8;
+        }
+        super::scalar_f64::<1>(inputs.remainder(), outputs.into_remainder()) | (finite != u64::MAX)
+    }
+
     #[target_feature(enable = "neon")]
     pub(super) unsafe fn f64_neon<const POLICY: u8>(input: &[f64], output: &mut [u8]) -> bool {
+        if POLICY == 1 {
+            // SAFETY: same NEON feature and slice-length contract as this kernel.
+            return unsafe { strict_f64_neon(input, output) };
+        }
         let mut inputs = input.chunks_exact(2);
         let mut outputs = output.chunks_exact_mut(2);
         let lower = vdupq_n_f64(-2147483648.0);
