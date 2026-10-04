@@ -68,12 +68,22 @@ Installed runtime jobs create their environments and run under the runner temp
 directory, while referring to scripts and fixtures by absolute checkout paths.
 
 Renovate inherits `LedFx/renovate-config`; versions are locked for development.
-Release Please maintains Python, Rust and lockfile versions together. Release
-workflows are disabled unless `ENABLE_RELEASE_AUTOMATION=true`. Before enabling
-it, maintainers must configure the org automation App, the protected `production`
-environment and PyPI trusted publishing for `publish.yml`. Publishing also needs
-an explicit tag dispatch with a successful CI run from that exact commit. No
-initial PyPI release exists or is assumed. [Source provenance](PROVENANCE.md)
+Release Please maintains Python, Rust and lockfile versions together on canonical
+`main`, using the existing automation App to create the release PR, version tag
+and draft release. Merging its release PR is the release action: the tag push
+runs `.github/workflows/ci.yml`. An early guard requires the tag, project,
+Python package, Rust package, lockfiles and release manifest versions to agree.
+All five platform builds, 35 installed-wheel variants and source/native checks
+must pass before publishing the same run's `sender-dist` artifact to PyPI.
+The GitHub draft is finalized with those tested assets after PyPI succeeds;
+publication jobs never rebuild packages. PR, branch and manual validation cannot
+publish, even when manually validating a tag.
+
+PyPI trusted publisher identity is owner `LedFx`, repository `ledfx-senders`,
+workflow `ci.yml`, environment `pypi`. Only the PyPI job receives OIDC
+`id-token: write`; both publication jobs use the `pypi` environment. No package
+API token or hidden enable variable is required. This configures future release
+automation; no initial PyPI release is assumed. [Source provenance](PROVENANCE.md)
 records the original repository and benchmark evidence.
 
 macOS wheel deployment targets account for both Rust and Python: Intel starts at

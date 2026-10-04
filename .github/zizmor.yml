@@ -2,6 +2,6 @@ rules:
   superfluous-actions:
     disable: true
   secrets-outside-env:
-    # Release automation only manages PRs/tags/drafts; publishing uses production.
+    # Release automation only manages PRs/tags/drafts; publishing uses pypi.
     ignore:
       - release-please.yml

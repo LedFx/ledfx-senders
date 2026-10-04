@@ -3,6 +3,18 @@ on:
   workflow_dispatch:
   push:
     branches: [feat/native-packet-senders]
+    paths:
+      - "native/**"
+      - "src/**"
+      - "tests/**"
+      - "ci/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "pdm_build.py"
+      - "setup.py"
+      - "setup.cfg"
+      - "rust-toolchain.toml"
+      - ".github/workflows/simd-benchmark.yml"
 permissions:
   contents: read
 jobs:
