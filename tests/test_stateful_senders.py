@@ -404,7 +404,7 @@ def test_real_owned_loopback_and_closed_sender(protocol: str, backend: str) -> N
         sender.close()
         sender.close()
         with pytest.raises(RuntimeError):
-            sender.send(bytes(sender.channel_count), now=1)
+            sender.send(bytes([42]) * sender.channel_count, now=1)
 
 
 def test_maximum_dnrgb_index_and_timestamp_atomicity() -> None:

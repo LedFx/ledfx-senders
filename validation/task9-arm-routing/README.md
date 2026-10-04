@@ -5,8 +5,8 @@ independent scalar/candidate correctness tests. Raw artifact members, run.json,
 local delta checks and lossless hashes are in evidence.tar.gz/manifest.json.
 
 At150000f64 channels, three paired two-second kernel repeats give:
-Linux ARM compiler264.88us, explicit NEON222.20us (1.19x); Apple Silicon
-compiler76.64us, explicit NEON111.46us (0.69x). Production now selects NEON only
+Linux ARM compiler264.89us, explicit NEON222.20us (1.19x); Apple Silicon
+compiler75.65us, explicit NEON111.46us (0.68x). Production now selects NEON only
 on Linux AArch64; Apple keeps the measured faster compiler route. No x86 hot
 code changed. These are kernel results, not end-to-end application claims.
 

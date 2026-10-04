@@ -151,12 +151,30 @@ impl<T: DatagramTransport> State<T> {
                 "nonfinite timestamp",
             ));
         }
+        // Equality to a successfully validated same-dtype common snapshot proves
+        // OSC domain validity. Snapshot shape/export validation already ran under
+        // the GIL. Rare/cross-dtype and realtime routes retain validation first.
+        let typed_osc_change = if self.layout.is_osc()
+            && self.initialized
+            && self.current.kind <= 4
+            && self.current.kind == self.previous.kind
+        {
+            Some(self.current.changed(&self.previous, true, &mut self.mask))
+        } else {
+            None
+        };
+        if typed_osc_change == Some(0) {
+            self.attempts += 1;
+            self.suppressed += 1;
+            return Ok(());
+        }
         self.current
             .encode(self.layout.is_osc(), &mut self.bytes, &mut self.floats)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-        let changed = self
-            .current
-            .changed(&self.previous, self.initialized, &mut self.mask);
+        let changed = typed_osc_change.unwrap_or_else(|| {
+            self.current
+                .changed(&self.previous, self.initialized, &mut self.mask)
+        });
         self.attempts += 1;
         if changed == 0
             && (self.layout.is_osc()

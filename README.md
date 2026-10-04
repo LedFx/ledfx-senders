@@ -180,7 +180,7 @@ unsupported configured sizes fall back to DRGB or DNRGB. DNRGB admits at most
 65536 pixels, with 489 pixels per chunk, and adaptive ties choose DRGB.
 
 On x86_64, measured f64 OSC conversion uses runtime-guarded AVX512F/DQ/BW/VL,
-then AVX2, with portable compiler code on older CPUs. Original f64 delta masks
+then AVX, with portable compiler code on older CPUs. Original f64 delta masks
 use measured AVX2 or compiler code; the mask preserves three-channel pixel
 boundaries and signed-zero equality. Realtime reuses the existing DDP SIMD
 policies. No global host CPU build flags are used. Native Linux AArch64 paired measurements select NEON OSC conversion;
@@ -188,3 +188,10 @@ Apple Silicon retains its faster compiler route. A NEON original-mask candidate
 is measured independently before production selection. Other dtypes and mixed/extended precision have exact
 portable implementations. Hosted SIMD jobs test and measure candidates without
 silently enabling an unmeasured architecture path.
+
+For OSC, an owned common typed snapshot equal to the last successfully validated
+snapshot of the same dtype can suppress before repeating normalization. Shape
+and closed-state checks still happen first. Rare and cross-dtype inputs retain
+full validation before comparison; realtime refresh also retains conversion so
+failed attempts cannot contaminate a later keepalive. Static OSC can still cost
+more than the former borrowed-array equality check because snapshots are owned.

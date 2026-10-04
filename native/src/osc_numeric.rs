@@ -19,9 +19,9 @@ pub fn convert(input: &[f64], output: &mut [f32]) -> bool {
             // SAFETY: complete CPU/OS checks and matching slices above.
             return unsafe { x86::avx512(input, output) };
         }
-        if std::arch::is_x86_feature_detected!("avx2") {
+        if std::arch::is_x86_feature_detected!("avx") {
             // SAFETY: CPU/OS checked and matching slices above.
-            return unsafe { x86::avx2(input, output) };
+            return unsafe { x86::avx(input, output) };
         }
     }
     #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
@@ -37,8 +37,8 @@ pub fn convert(input: &[f64], output: &mut [f32]) -> bool {
 #[cfg(target_arch = "x86_64")]
 mod x86 {
     use std::arch::x86_64::*;
-    #[target_feature(enable = "avx2")]
-    pub(super) unsafe fn avx2(input: &[f64], output: &mut [f32]) -> bool {
+    #[target_feature(enable = "avx")]
+    pub(super) unsafe fn avx(input: &[f64], output: &mut [f32]) -> bool {
         let mut src = input.chunks_exact(4);
         let mut dst = output.chunks_exact_mut(4);
         let mut valid = _mm256_castsi256_pd(_mm256_set1_epi64x(-1));
@@ -117,8 +117,8 @@ mod tests {
         let mut kernels: Vec<(&str, Kernel)> = vec![("scalar", scalar)];
         #[cfg(target_arch = "x86_64")]
         {
-            if std::arch::is_x86_feature_detected!("avx2") {
-                kernels.push(("avx2", |a, b| unsafe { x86::avx2(a, b) }));
+            if std::arch::is_x86_feature_detected!("avx") {
+                kernels.push(("avx", |a, b| unsafe { x86::avx(a, b) }));
             }
             if std::arch::is_x86_feature_detected!("avx512f")
                 && std::arch::is_x86_feature_detected!("avx512dq")
