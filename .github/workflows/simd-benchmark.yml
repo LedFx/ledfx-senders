@@ -13,7 +13,7 @@ jobs:
       matrix:
         runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel, windows-2025]
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -30,6 +30,28 @@ jobs:
           rustc --version --verbose
           if command -v lscpu >/dev/null; then lscpu; fi
           if command -v sysctl >/dev/null; then sysctl -a 2>/dev/null | grep -E 'machdep.cpu|hw.model|hw.ncpu' || true; fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: 12d9030a181a828b0738b04134e4dc5608f6d7a8
+          path: .benchmark-control-source
+      - name: Build immutable control and candidate wheels
+        shell: bash
+        run: |
+          PYO3_PYTHON="$(uv python find 3.12)"
+          export PYO3_PYTHON
+          uv build --wheel --out-dir candidate-wheels
+          uv build .benchmark-control-source --wheel --out-dir "$PWD/control-wheels"
+          uv venv --python 3.12 .measure-env
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            measure_python="$PWD/.measure-env/Scripts/python.exe"
+          else
+            measure_python="$PWD/.measure-env/bin/python"
+          fi
+          uv pip install --python "$measure_python" candidate-wheels/*.whl
+          "$measure_python" -c "from pathlib import Path; from zipfile import ZipFile; [ZipFile(next(Path(label+'-wheels').glob('*.whl'))).extractall(label+'-package') for label in ('control','candidate')]"
+          echo "MEASURE_PYTHON=$measure_python" >> "$GITHUB_ENV"
+          cargo build --locked --release --manifest-path native/Cargo.toml --bin ledfx-receiver
       - name: Optimized paths and matched scalar control
         shell: bash
         working-directory: native
@@ -43,6 +65,7 @@ jobs:
           cargo test --locked --release --lib artnet
           cargo test --locked --release --lib encoders
           cargo test --locked --release --lib nanoleaf
+          "$MEASURE_PYTHON" ../ci/archive_measurement.py
           cargo test --locked --release --lib convert::tests::benchmark_supported_kernels -- --ignored --exact --nocapture --test-threads=1 | tee simd-results.log
           cargo test --locked --release --lib osc_numeric::tests::benchmark_osc_kernels -- --ignored --exact --nocapture --test-threads=1 | tee osc-simd-results.log
           cargo test --locked --release --lib original::tests::benchmark_stateful_kernels -- --ignored --exact --nocapture --test-threads=1 | tee original-results.log
@@ -59,8 +82,11 @@ jobs:
           PYO3_PYTHON="$(uv python find 3.12)"
           export PYO3_PYTHON
           cargo build --locked --release --manifest-path native/Cargo.toml --bin ledfx-receiver
-          uv run --no-project --with . --python 3.12 python ci/receiver_smoke.py | tee native/receiver-results.log
-          uv run --no-project --with . --python 3.12 python ci/benchmark_vendor_gather.py | tee native/vendor-gather-results.log
+          "$MEASURE_PYTHON" ci/receiver_smoke.py | tee native/receiver-results.log
+          "$MEASURE_PYTHON" ci/structural_smoke.py | tee native/structural-results.log
+          "$MEASURE_PYTHON" ci/benchmark_vendor_gather.py | tee native/vendor-gather-results.log
+          "$MEASURE_PYTHON" ci/benchmark_whole_call.py --control control-package --candidate candidate-package | tee native/whole-call-results.log
+          "$MEASURE_PYTHON" ci/archive_measurement.py --verify
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
@@ -78,3 +104,6 @@ jobs:
             native/vendor-gather-results.log
             native/target/release/deps/_native*.s
             native/receiver-results.log
+            native/structural-results.log
+            native/whole-call-results.log
+            measurement-artifacts/

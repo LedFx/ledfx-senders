@@ -277,6 +277,30 @@ The [manufacturer's API documentation](https://nanoleaf.atlassian.net/wiki/space
 capacity is not a firmware or hardware-rate claim. Large datagrams are tested
 for encoding bounds separately from small loopback delivery.
 
-The new encoders reuse previously measured float conversion dispatch. Additional
-portable packing candidates are test-only until paired x86-64 and ARM64 results
-justify selection. No 32-bit ARM execution or performance validation is claimed.
+The new encoders reuse previously measured float conversion dispatch. Provisional
+portable packing routes use preallocated output at 128+ pixels for Adalight on
+measured Linux/Windows/macOS x86-64 and Linux/macOS ARM64, and for OpenRGB except
+macOS x86-64. Art-Net caches its short-copy route for groups of at most 32 channel
+bytes on those x86-64 platforms. Ordinary/long spans, ARM64 Art-Net, tiny vendor
+frames and unmeasured architectures retain reference packing. These are compiler
+loops, not new explicit ISA intrinsics; final whole-call crossover measurements
+must confirm or reject the provisional cutoffs. Losing controls remain in the
+paired benchmark. No 32-bit ARM execution or performance validation is claimed.
+
+The benchmark-only `ledfx-receiver ddp-structural <pixels> <portable|batched>
+<loopback-address>` receives arbitrary RGB effect data without modifying it.
+Its stdin accepts `snapshot` and `stop`; each stdout JSON snapshot contains
+cumulative packet/byte/push/structurally-complete/invalid counters, monotonic
+elapsed seconds, CPU time where available, and kernel socket drops where
+available. Rates use the difference between the receiver's two snapshot times.
+Assembly state persists across snapshots, so a completion can include a frame
+started just before the interval. The 4-bit DDP sequence cannot establish unique
+frame identity across wraps or reordered traffic. Incomplete-assembly and gap
+counts are events, not uniquely identified lost frames. The original golden
+fixture receiver remains available for exact byte/identity validation.
+
+Hosted route measurements freeze both wheels, measured Rust executables, loaded
+facades/extension, source archives and SHA-256 manifests before measurement and
+verify them afterward. Public-facade whole-call pairs compare an immutable
+12d9030 control with this candidate, including tiny/cutover/ordinary layout
+controls; these are distinct from sustained application transport measurements.

@@ -36,7 +36,16 @@ impl Batch {
 }
 impl Receiver {
     pub fn new(batched: bool) -> io::Result<Self> {
-        let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
+        Self::bind(batched, Ipv4Addr::LOCALHOST)
+    }
+    pub fn bind(batched: bool, address: Ipv4Addr) -> io::Result<Self> {
+        if !address.is_loopback() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "receiver requires loopback",
+            ));
+        }
+        let socket = UdpSocket::bind((address, 0))?;
         socket.set_nonblocking(true)?;
         socket2::SockRef::from(&socket).set_recv_buffer_size(16 * 1024 * 1024)?;
         Ok(Self {

@@ -234,7 +234,37 @@ pub fn encode_govee(
     })
 }
 
+// Portable compiler loops: conservative provisional cutoffs under paired review.
+const MEASURED_PACKING: bool = cfg!(any(
+    all(
+        target_arch = "x86_64",
+        any(
+            target_os = "linux",
+            target_os = "windows",
+            target_os = "macos"
+        )
+    ),
+    all(
+        target_arch = "aarch64",
+        any(target_os = "linux", target_os = "macos")
+    )
+));
 fn pack_adalight(rgb: &[u8], count: usize, indices: [usize; 3]) -> Vec<u8> {
+    if MEASURED_PACKING && count >= 128 {
+        pack_adalight_bulk(rgb, count, indices)
+    } else {
+        pack_adalight_reference(rgb, count, indices)
+    }
+}
+fn pack_openrgb(rgb: &[u8], count: usize, device_id: u32) -> Vec<u8> {
+    if MEASURED_PACKING && !cfg!(all(target_arch = "x86_64", target_os = "macos")) && count >= 128 {
+        pack_openrgb_bulk(rgb, count, device_id)
+    } else {
+        pack_openrgb_reference(rgb, count, device_id)
+    }
+}
+
+fn pack_adalight_reference(rgb: &[u8], count: usize, indices: [usize; 3]) -> Vec<u8> {
     let n = (count - 1) as u16;
     let [hi, lo] = n.to_be_bytes();
     let mut out = Vec::with_capacity(6 + rgb.len());
@@ -245,7 +275,7 @@ fn pack_adalight(rgb: &[u8], count: usize, indices: [usize; 3]) -> Vec<u8> {
     out
 }
 
-fn pack_openrgb(rgb: &[u8], count: usize, device_id: u32) -> Vec<u8> {
+fn pack_openrgb_reference(rgb: &[u8], count: usize, device_id: u32) -> Vec<u8> {
     let mut out = Vec::with_capacity(22 + count * 4);
     out.extend_from_slice(b"ORGB");
     out.extend_from_slice(&device_id.to_le_bytes());
@@ -304,41 +334,42 @@ fn pack_govee(rgb: &[u8], count: usize, stretch: bool) -> Vec<u8> {
     out
 }
 
+fn pack_adalight_bulk(rgb: &[u8], count: usize, indices: [usize; 3]) -> Vec<u8> {
+    let mut output = vec![0; 6 + rgb.len()];
+    let [high, low] = ((count - 1) as u16).to_be_bytes();
+    output[..6].copy_from_slice(&[b'A', b'd', b'a', high, low, high ^ low ^ 0x55]);
+    for (out, pixel) in output[6..].chunks_exact_mut(3).zip(rgb.chunks_exact(3)) {
+        out[0] = pixel[indices[0]];
+        out[1] = pixel[indices[1]];
+        out[2] = pixel[indices[2]];
+    }
+    output
+}
+fn pack_openrgb_bulk(rgb: &[u8], count: usize, device_id: u32) -> Vec<u8> {
+    let mut output = vec![0; 22 + count * 4];
+    output[..4].copy_from_slice(b"ORGB");
+    output[4..8].copy_from_slice(&device_id.to_le_bytes());
+    output[8..12].copy_from_slice(&1050u32.to_le_bytes());
+    output[12..16].copy_from_slice(&((count * 4 + 6) as u32).to_le_bytes());
+    output[16..20].copy_from_slice(&((count * 4 + 6) as u32).to_le_bytes());
+    output[20..22].copy_from_slice(&(count as u16).to_le_bytes());
+    for (out, pixel) in output[22..].chunks_exact_mut(4).zip(rgb.chunks_exact(3)) {
+        out[0] = pixel[0];
+        out[1] = pixel[1];
+        out[2] = pixel[2];
+    }
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::{hint::black_box, time::Instant};
 
-    fn pack_adalight_bulk(rgb: &[u8], count: usize, indices: [usize; 3]) -> Vec<u8> {
-        let mut output = vec![0; 6 + rgb.len()];
-        let [high, low] = ((count - 1) as u16).to_be_bytes();
-        output[..6].copy_from_slice(&[b'A', b'd', b'a', high, low, high ^ low ^ 0x55]);
-        for (out, pixel) in output[6..].chunks_exact_mut(3).zip(rgb.chunks_exact(3)) {
-            out[0] = pixel[indices[0]];
-            out[1] = pixel[indices[1]];
-            out[2] = pixel[indices[2]];
-        }
-        output
-    }
-    fn pack_openrgb_bulk(rgb: &[u8], count: usize, device_id: u32) -> Vec<u8> {
-        let mut output = vec![0; 22 + count * 4];
-        output[..4].copy_from_slice(b"ORGB");
-        output[4..8].copy_from_slice(&device_id.to_le_bytes());
-        output[8..12].copy_from_slice(&1050u32.to_le_bytes());
-        output[12..16].copy_from_slice(&((count * 4 + 6) as u32).to_le_bytes());
-        output[16..20].copy_from_slice(&((count * 4 + 6) as u32).to_le_bytes());
-        output[20..22].copy_from_slice(&(count as u16).to_le_bytes());
-        for (out, pixel) in output[22..].chunks_exact_mut(4).zip(rgb.chunks_exact(3)) {
-            out[0] = pixel[0];
-            out[1] = pixel[1];
-            out[2] = pixel[2];
-        }
-        output
-    }
     #[test]
     #[ignore = "bounded paired compiler packing candidate"]
     fn benchmark_bulk_packing() {
-        for pixels in [1, 30, 170, 1024, 50000] {
+        for pixels in [1, 30, 127, 128, 129, 170, 1024, 50000] {
             let input: Vec<u8> = (0..pixels * 3).map(|i| i as u8).collect();
             let loops = if pixels < 1024 { 10000 } else { 1000 };
             for trial in 0..7 {
@@ -351,15 +382,17 @@ mod tests {
                         let begin = Instant::now();
                         for _ in 0..loops {
                             let output = match (protocol, candidate) {
-                                ("adalight", false) => {
-                                    pack_adalight(black_box(&input), pixels, black_box([2, 0, 1]))
-                                }
+                                ("adalight", false) => pack_adalight_reference(
+                                    black_box(&input),
+                                    pixels,
+                                    black_box([2, 0, 1]),
+                                ),
                                 ("adalight", true) => pack_adalight_bulk(
                                     black_box(&input),
                                     pixels,
                                     black_box([2, 0, 1]),
                                 ),
-                                (_, false) => pack_openrgb(black_box(&input), pixels, 0),
+                                (_, false) => pack_openrgb_reference(black_box(&input), pixels, 0),
                                 (_, true) => pack_openrgb_bulk(black_box(&input), pixels, 0),
                             };
                             black_box(output);
@@ -377,7 +410,7 @@ mod tests {
     #[test]
     fn bulk_packing_matches_all_orders_offsets_and_tails() {
         for pixels in [
-            1, 2, 3, 4, 5, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65, 170, 171, 1024,
+            1, 2, 3, 4, 5, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129, 170, 171, 1024,
         ] {
             for offset in 0..32 {
                 let source: Vec<u8> = (0..pixels * 3 + offset).map(|i| (i * 79) as u8).collect();
@@ -391,13 +424,21 @@ mod tests {
                     [2, 1, 0],
                 ] {
                     assert_eq!(
+                        pack_adalight(rgb, pixels, order),
+                        pack_adalight_reference(rgb, pixels, order)
+                    );
+                    assert_eq!(
                         pack_adalight_bulk(rgb, pixels, order),
-                        pack_adalight(rgb, pixels, order)
+                        pack_adalight_reference(rgb, pixels, order)
                     );
                 }
                 assert_eq!(
+                    pack_openrgb(rgb, pixels, 0x12345678),
+                    pack_openrgb_reference(rgb, pixels, 0x12345678)
+                );
+                assert_eq!(
                     pack_openrgb_bulk(rgb, pixels, 0x12345678),
-                    pack_openrgb(rgb, pixels, 0x12345678)
+                    pack_openrgb_reference(rgb, pixels, 0x12345678)
                 );
             }
         }

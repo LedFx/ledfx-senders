@@ -27,6 +27,7 @@ pub(crate) enum White {
 pub(crate) struct Layout {
     packets: Vec<Vec<u8>>,
     spans: Vec<(usize, usize, usize, usize)>,
+    short_spans: bool,
     order: [usize; 3],
     white: White,
     output_count: usize,
@@ -122,15 +123,63 @@ impl Layout {
         Ok(Self {
             packets,
             spans,
+            short_spans: cfg!(all(
+                target_arch = "x86_64",
+                any(
+                    target_os = "linux",
+                    target_os = "windows",
+                    target_os = "macos"
+                )
+            )) && group_channels <= 32,
             order,
             white,
             output_count: pixels * channels,
         })
     }
     fn pack(&mut self, bytes: &[u8]) {
+        if self.short_spans {
+            for &(packet, slot, input, n) in &self.spans {
+                short_copy(
+                    &mut self.packets[packet][slot..slot + n],
+                    &bytes[input..input + n],
+                );
+            }
+        } else {
+            self.pack_reference(bytes);
+        }
+    }
+    fn pack_reference(&mut self, bytes: &[u8]) {
         for &(packet, slot, input, n) in &self.spans {
             self.packets[packet][slot..slot + n].copy_from_slice(&bytes[input..input + n]);
         }
+    }
+}
+
+#[inline]
+fn short_copy(output: &mut [u8], input: &[u8]) {
+    let n = output.len();
+    assert_eq!(n, input.len());
+    match n {
+        0 => {}
+        1 => output[0] = input[0],
+        2 => output.copy_from_slice(input),
+        3 => {
+            output[..2].copy_from_slice(&input[..2]);
+            output[2] = input[2];
+        }
+        4..=7 => {
+            output[..4].copy_from_slice(&input[..4]);
+            output[n - 4..].copy_from_slice(&input[n - 4..]);
+        }
+        8..=15 => {
+            output[..8].copy_from_slice(&input[..8]);
+            output[n - 8..].copy_from_slice(&input[n - 8..]);
+        }
+        16..=32 => {
+            output[..16].copy_from_slice(&input[..16]);
+            output[n - 16..].copy_from_slice(&input[n - 16..]);
+        }
+        _ => output.copy_from_slice(input),
     }
 }
 

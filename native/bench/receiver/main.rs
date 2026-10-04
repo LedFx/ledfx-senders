@@ -1,6 +1,7 @@
 //! Loopback-only benchmark receiver. Production senders never import this binary.
 mod oracle;
 mod socket;
+mod structural;
 use oracle::{Oracle, Protocol};
 use std::{
     io::{self, BufRead, Read, Write},
@@ -31,6 +32,9 @@ fn cpu_seconds() -> Option<(f64, f64)> {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
+    if args.get(1).is_some_and(|mode| mode == "ddp-structural") {
+        return structural::run(&args[2..]);
+    }
     if args.len() != 6 {
         return Err("usage: ledfx-receiver <ddp|e131|opc> <raw-RGB-fixture> <portable|batched> <window> <identifier>".into());
     }
