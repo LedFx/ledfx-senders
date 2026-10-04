@@ -137,33 +137,39 @@ jobs:
           path: wheelhouse
       # No Rust installation or project sync: test the shipped binary itself.
       - name: Install selected sender wheel and its dependencies
+        working-directory: ${{ runner.temp }}
         run: |
-          uv venv --python "$PYTHON_VERSION" wheel-venv
-          uv pip install --python wheel-venv pytest hypothesis numpy
-          uv pip install --python wheel-venv --no-index --find-links wheelhouse ledfx-senders
+          uv venv --python "$PYTHON_VERSION" "$RUNNER_TEMP/sender-wheel-venv"
+          uv pip install --python "$RUNNER_TEMP/sender-wheel-venv" pytest hypothesis numpy
+          uv pip install --python "$RUNNER_TEMP/sender-wheel-venv" --no-index --find-links "$GITHUB_WORKSPACE/wheelhouse" ledfx-senders
       - name: Native socket, buffer, control and cleanup smoke
         if: runner.os != 'Windows'
+        working-directory: ${{ runner.temp }}
         run: |
           if [[ "$PYTHON_VERSION" == *t ]]; then
             export LEDFX_REQUIRE_FREE_THREADING=1
           fi
-          uv run --no-project --python wheel-venv python -I ci/native_wheel_smoke.py
-          uv run --no-project --python wheel-venv python -I -m pytest --noconftest tests -q
+          "$RUNNER_TEMP/sender-wheel-venv/bin/python" -I "$GITHUB_WORKSPACE/ci/native_wheel_smoke.py"
+          "$RUNNER_TEMP/sender-wheel-venv/bin/python" -I -m pytest --noconftest "$GITHUB_WORKSPACE/tests" -q
           if [[ "$PYTHON_VERSION" == *t ]]; then
-            PYTHON_GIL=0 uv run --no-project --python wheel-venv python -I -X gil=0 ci/native_wheel_smoke.py
+            PYTHON_GIL=0 "$RUNNER_TEMP/sender-wheel-venv/bin/python" -I -X gil=0 "$GITHUB_WORKSPACE/ci/native_wheel_smoke.py"
           fi
       - name: Native socket, buffer, control and cleanup smoke (PowerShell)
         if: runner.os == 'Windows'
         shell: pwsh
+        working-directory: ${{ runner.temp }}
         run: |
+          $python = Join-Path $env:RUNNER_TEMP 'sender-wheel-venv/Scripts/python.exe'
+          $smoke = Join-Path $env:GITHUB_WORKSPACE 'ci/native_wheel_smoke.py'
+          $tests = Join-Path $env:GITHUB_WORKSPACE 'tests'
           if ($env:PYTHON_VERSION.EndsWith('t')) { $env:LEDFX_REQUIRE_FREE_THREADING = '1' }
-          & ./wheel-venv/Scripts/python.exe -I ci/native_wheel_smoke.py
+          & $python -I $smoke
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & ./wheel-venv/Scripts/python.exe -I -m pytest --noconftest tests -q
+          & $python -I -m pytest --noconftest $tests -q
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if ($env:PYTHON_VERSION.EndsWith('t')) {
             $env:PYTHON_GIL = '0'
-            & ./wheel-venv/Scripts/python.exe -I -X gil=0 ci/native_wheel_smoke.py
+            & $python -I -X gil=0 $smoke
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 

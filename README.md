@@ -60,6 +60,13 @@ The source distribution is rebuilt and tested outside a source checkout.
 Hosted results remain pending until CI runs; matrix configuration is not proof
 that a platform passed.
 
+Strict Pyrefly checks all Python source, native stubs and tests without a baseline
+or suppressions: `uv run --frozen --only-group dev --python 3.12 python ci/check_types.py`.
+Its source search paths also include the independent test oracle. NumPy is in the
+dev group so this gate resolves its types without building the native library.
+Installed runtime jobs create their environments and run under the runner temp
+directory, while referring to scripts and fixtures by absolute checkout paths.
+
 Renovate inherits `LedFx/renovate-config`; versions are locked for development.
 Release Please maintains Python, Rust and lockfile versions together. Release
 workflows are disabled unless `ENABLE_RELEASE_AUTOMATION=true`. Before enabling

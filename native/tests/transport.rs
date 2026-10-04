@@ -88,7 +88,7 @@ fn real_socket_backends_preserve_batch_payloads() {
     for batched in [false, true] {
         let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
         // This test drains only after the full burst. Account for kernel skb
-        // overhead as well as payload bytes, independent of host defaults.
+        // overhead as well as payload bytes by requesting additional headroom.
         socket2::SockRef::from(&receiver)
             .set_recv_buffer_size(1024 * 1024)
             .unwrap();
