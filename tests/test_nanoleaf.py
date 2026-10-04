@@ -92,6 +92,17 @@ def test_actual_loopback_delivery_and_close():
             s.send(bytes(3))
 
 
+@pytest.mark.parametrize("dtype", [np.float16, np.longdouble])
+def test_rare_clamp_truncates_in_original_precision(dtype: type[np.floating]) -> None:
+    s = sender(2, (7,))
+    frame = np.array(
+        [[np.nextafter(dtype(2), dtype(0)), dtype(-1024), dtype(1024)]], dtype=dtype
+    )
+    s.send(frame)
+    assert s._engine.captures()[0][0] == bytes.fromhex("000100070100ff000000")
+    s.close()
+
+
 @pytest.mark.parametrize("operation", ["send", "close"])
 def test_contended_calls_release_gil(operation: str) -> None:
     import faulthandler

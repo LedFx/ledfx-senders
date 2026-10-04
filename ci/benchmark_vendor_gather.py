@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 
 from ledfx_senders import _native
+from ledfx_senders import encoders as vendor_facade
 from ledfx_senders.encoders import RGBGather
 
 print(
@@ -20,6 +21,10 @@ print(
             "native": _native.__file__,
             "native_sha256": hashlib.sha256(
                 Path(_native.__file__).read_bytes()
+            ).hexdigest(),
+            "facade": vendor_facade.__file__,
+            "facade_sha256": hashlib.sha256(
+                Path(vendor_facade.__file__).read_bytes()
             ).hexdigest(),
             "numpy": np.__version__,
             "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),

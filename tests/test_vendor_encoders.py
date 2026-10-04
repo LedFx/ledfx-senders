@@ -196,3 +196,36 @@ def test_rgb_gather_rejects_malformed_permutations(
 ) -> None:
     with pytest.raises((TypeError, ValueError)):
         vendor.RGBGather(permutation)
+
+
+@pytest.mark.parametrize("dtype", [np.float16, np.longdouble])
+def test_rare_float_boundaries_keep_original_precision(
+    dtype: type[np.floating],
+) -> None:
+    below_two = np.nextafter(dtype(2), dtype(0))
+    above_minus_one = np.nextafter(dtype(-1), dtype(0))
+    below_256 = np.nextafter(dtype(256), dtype(0))
+    frame = np.array([[below_two, above_minus_one, below_256]], dtype=dtype)
+    expected = bytes([1, 0, 255])
+    assert vendor.encode_adalight(frame, "RGB")[6:] == expected
+    assert vendor.encode_openrgb(frame, 0)[22:] == expected + b"\0"
+    hue = vendor.encode_hue(frame, "12345678-1234-1234-1234-123456789abc", (0,), 0)
+    assert hue[52:] == b"\0\1\1\0\0\xff\xff"
+    for bad in (dtype(-1), dtype(256)):
+        frame[0, 2] = bad
+        with pytest.raises(ValueError):
+            vendor.encode_hue(frame, "12345678-1234-1234-1234-123456789abc", (0,), 0)
+
+
+def test_longdouble_wrap_cutoff_preserves_low_bits_before_narrowing() -> None:
+    dtype = np.longdouble
+    values = [
+        np.nextafter(dtype(2**31), dtype(0)),
+        np.nextafter(dtype(-(2**31)), dtype(0)),
+        dtype(2**31),
+    ]
+    frame = np.array([values], dtype=dtype)
+    # Native-width extended precision differs by platform; int() operates on
+    # each original scalar and establishes the independent truncation oracle.
+    expected = bytes([int(values[0]) % 256, int(values[1]) % 256, 0])
+    assert vendor.encode_adalight(frame, "RGB")[6:] == expected
