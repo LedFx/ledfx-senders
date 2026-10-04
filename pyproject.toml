@@ -1,0 +1,39 @@
+[project]
+name = "ledfx-senders"
+version = "0.1.0"
+description = "Native packet senders for Python applications"
+requires-python = ">=3.11,<3.16"
+dependencies = ["numpy>=2.0.0,<3.0.0"]
+license = { text = "GPL-3.0 License" }
+readme = "README.md"
+authors = [{ name = "LedFx Developers" }]
+
+[build-system]
+requires = ["pdm-backend", "setuptools>=80", "setuptools-rust>=1.12"]
+build-backend = "pdm.backend"
+
+[tool.pdm.build]
+run-setuptools = true
+includes = ["src/ledfx_senders"]
+source-includes = ["pdm_build.py", "native/Cargo.toml", "native/Cargo.lock", "native/src", "native/tests", "native/build.rs", "rust-toolchain.toml", "tests", "ci"]
+excludes = ["native/target/**", "**/__pycache__/**", "**/.pytest_cache/**"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [".*", "dist", "build", "native"]
+
+[tool.cibuildwheel]
+build = "cp3{11,12,13,14,15}-* cp3{14,15}t-*"
+skip = "*-musllinux_* *-win32 *-win_arm64"
+archs = "native"
+# FT 3.14+ is enabled by default; cibuildwheel 4 removed experimental 3.13t.
+# 3.15 is explicitly selected even with cibuildwheel releases from its beta period.
+enable = ["cpython-prerelease"]
+test-requires = ["pytest>=8,<10", "hypothesis"]
+test-command = "python -I {project}/ci/native_wheel_smoke.py && python -I -m pytest --noconftest {project}/tests -q"
+
+[tool.cibuildwheel.linux]
+manylinux-x86_64-image = "quay.io/pypa/manylinux_2_28_x86_64@sha256:39df0042d5cc900b085aa25a0659368b42a0006c54c474299b785b44c1b4ff82"
+manylinux-aarch64-image = "quay.io/pypa/manylinux_2_28_aarch64@sha256:f5f03dedf61b47d69d0742d36047db78adeee3bdb7a9910ff52304750ecf2514"
+before-all = "bash {project}/ci/install-native-rust.sh"
+environment = { CARGO_TARGET_DIR = "/tmp/ledfx-native-target", CARGO_HOME = "/opt/ledfx-cargo", RUSTUP_HOME = "/opt/ledfx-rustup", PATH = "/opt/ledfx-cargo/bin:$PATH" }
