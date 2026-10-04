@@ -44,7 +44,7 @@ jobs:
           cargo test --locked --release --lib osc_numeric::tests::benchmark_osc_kernels -- --ignored --exact --nocapture --test-threads=1 | tee osc-simd-results.log
           cargo test --locked --release --lib original::tests::benchmark_stateful_kernels -- --ignored --exact --nocapture --test-threads=1 | tee original-results.log
           cargo test --locked --release --lib change_mask::tests::benchmark_change_masks -- --ignored --exact --nocapture --test-threads=1 | tee mask-results.log
-          cargo rustc --locked --release --lib -- --emit=asm
+          cargo rustc --locked --release --lib --crate-type rlib -- --emit=asm
       - name: Short native receiver smoke outside the development host
         shell: bash
         run: |
@@ -53,6 +53,7 @@ jobs:
           cargo build --locked --release --manifest-path native/Cargo.toml --bin ledfx-receiver
           uv run --no-project --with . --python 3.12 python ci/receiver_smoke.py | tee native/receiver-results.log
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
         with:
           name: simd-${{ matrix.runner }}
           path: |
