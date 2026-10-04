@@ -85,6 +85,7 @@ pub struct Oracle {
     chunks: usize,
     frames: Vec<Frame>,
     highest: u64,
+    source_cid: Option<[u8; 16]>,
     pub max_identity: u64,
     pub counts: Counts,
 }
@@ -122,6 +123,7 @@ impl Oracle {
             chunks,
             frames: (0..window).map(|_| Frame::new(chunks, now)).collect(),
             highest: 0,
+            source_cid: None,
             max_identity,
             counts: Counts::default(),
         })
@@ -233,17 +235,40 @@ impl Oracle {
             }
         }
     }
+    // A benchmark receiver observes one E131 source. Pin only after all wire,
+    // fixture and sequence validation, before any frame assembly mutation.
+    fn accept_source(&mut self, packet: &[u8]) -> bool {
+        if self.protocol != Protocol::E131 {
+            return true;
+        }
+        let cid: [u8; 16] = packet[22..38].try_into().unwrap();
+        match self.source_cid {
+            Some(expected) => cid == expected,
+            None => {
+                self.source_cid = Some(cid);
+                true
+            }
+        }
+    }
     pub fn feed(&mut self, packet: &[u8], now: Instant) {
         self.counts.datagrams += 1;
         self.counts.bytes += packet.len() as u64;
         let data = match self.parse(packet) {
             Ok(Packet::Data(data)) => data,
             Ok(Packet::Sync) => {
-                self.counts.sync += 1;
+                if self.accept_source(packet) {
+                    self.counts.sync += 1;
+                } else {
+                    self.counts.invalid += 1;
+                }
                 return;
             }
             Ok(Packet::Maintenance) => {
-                self.counts.maintenance += 1;
+                if self.accept_source(packet) {
+                    self.counts.maintenance += 1;
+                } else {
+                    self.counts.invalid += 1;
+                }
                 return;
             }
             Err(()) => {
@@ -270,6 +295,10 @@ impl Oracle {
         };
         if data.sequence != sequence {
             self.counts.wrong_sequence += 1;
+            self.counts.invalid += 1;
+            return;
+        }
+        if !self.accept_source(packet) {
             self.counts.invalid += 1;
             return;
         }
@@ -453,6 +482,52 @@ mod tests {
         assert_eq!(o.counts.invalid, 2);
         o.expire(now, true);
         assert_eq!(o.counts.incomplete, 1);
+    }
+    #[test]
+    fn e131_sources_cannot_join_frames_or_controls() {
+        let now = Instant::now();
+        let mut o = Oracle::new(Protocol::E131, vec![7; 513], 0, 32, now).unwrap();
+        let mut first = e131(1, 0, 513);
+        first[22..38].fill(1);
+        let mut malformed = first.clone();
+        malformed[22..38].fill(9);
+        malformed[134] = 99;
+        o.feed(&malformed, now);
+        assert_eq!(o.source_cid, None);
+        o.feed(&first, now);
+        let mut second = e131(1, 1, 513);
+        second[22..38].fill(2);
+        o.feed(&second, now);
+        assert_eq!(o.counts.complete, 0);
+        second[22..38].fill(1);
+        o.feed(&second, now);
+        assert_eq!(o.counts.complete, 1);
+        let mut sync = first[..49].to_vec();
+        sync[16..18].copy_from_slice(&0x7021u16.to_be_bytes());
+        sync[18..22].copy_from_slice(&8u32.to_be_bytes());
+        sync[38..40].copy_from_slice(&0x700bu16.to_be_bytes());
+        sync[40..44].copy_from_slice(&1u32.to_be_bytes());
+        sync[45..47].copy_from_slice(&63999u16.to_be_bytes());
+        let mut discovery = vec![0; 122];
+        discovery[..44].copy_from_slice(&sync[..44]);
+        discovery[16..18].copy_from_slice(&0x706au16.to_be_bytes());
+        discovery[38..40].copy_from_slice(&0x7054u16.to_be_bytes());
+        discovery[40..44].copy_from_slice(&2u32.to_be_bytes());
+        discovery[112..114].copy_from_slice(&0x700au16.to_be_bytes());
+        discovery[114..118].copy_from_slice(&1u32.to_be_bytes());
+        discovery[120..122].copy_from_slice(&1u16.to_be_bytes());
+        let mut termination = first;
+        termination[112] = 0x40;
+        for mut control in [sync, discovery, termination] {
+            control[22..38].fill(2);
+            o.feed(&control, now);
+            control[22..38].fill(1);
+            o.feed(&control, now);
+        }
+        assert_eq!(o.counts.invalid, 5);
+        assert_eq!(o.counts.sync, 1);
+        assert_eq!(o.counts.maintenance, 2);
+        assert_eq!(o.counts.complete, 1);
     }
     #[test]
     fn opc_length_channel_pattern_and_duplicate_are_independent() {

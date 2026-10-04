@@ -117,7 +117,7 @@ before packet or sequence mutation. Inputs are copied into owned native storage
 before detached work; callers must not mutate a frame during its input copy.
 Close is serialized with send and is idempotent. A closed sender rejects sends.
 
-Float conversion for DDP, E1.31 and OPC validates every value while using AVX2 on supported x86-64
+Float conversion for DDP, E1.31 and OPC validates every value while using AVX512F/DQ/BW/VL or AVX2 on supported x86-64
 CPUs, SSE2 on other x86-64 CPUs, or NEON on AArch64 (including Apple Silicon).
 Runtime feature checks guard each specialized kernel. Other targets retain a
 portable scalar implementation; ARM32 is not a supported wheel target and has

@@ -16,6 +16,11 @@ fn scalar(value: f64) -> u8 {
 fn dispatch_f32<const POLICY: u8>(input: &[f32], output: &mut [u8]) -> bool {
     assert_eq!(input.len(), output.len());
     #[cfg(target_arch = "x86_64")]
+    if x86::avx512_available() {
+        // SAFETY: all required CPU/OS features checked; lengths match.
+        return unsafe { x86::f32_avx512::<POLICY>(input, output) };
+    }
+    #[cfg(target_arch = "x86_64")]
     if std::arch::is_x86_feature_detected!("avx2") {
         // SAFETY: feature detection dominates this call; slice lengths match.
         return unsafe { x86::f32_avx2::<POLICY>(input, output) };
@@ -34,6 +39,11 @@ fn dispatch_f32<const POLICY: u8>(input: &[f32], output: &mut [u8]) -> bool {
 }
 fn dispatch_f64<const POLICY: u8>(input: &[f64], output: &mut [u8]) -> bool {
     assert_eq!(input.len(), output.len());
+    #[cfg(target_arch = "x86_64")]
+    if x86::avx512_available() {
+        // SAFETY: all required CPU/OS features checked; lengths match.
+        return unsafe { x86::f64_avx512::<POLICY>(input, output) };
+    }
     #[cfg(target_arch = "x86_64")]
     if std::arch::is_x86_feature_detected!("avx2") {
         // SAFETY: feature detection dominates this call; slice lengths match.
@@ -105,6 +115,72 @@ fn scalar_f64<const POLICY: u8>(input: &[f64], output: &mut [u8]) -> bool {
 #[cfg(target_arch = "x86_64")]
 mod x86 {
     use std::arch::x86_64::*;
+
+    #[inline]
+    pub(super) fn avx512_available() -> bool {
+        // Standard runtime detection includes the OS extended-state support.
+        std::arch::is_x86_feature_detected!("avx512f")
+            && std::arch::is_x86_feature_detected!("avx512dq")
+            && std::arch::is_x86_feature_detected!("avx512bw")
+            && std::arch::is_x86_feature_detected!("avx512vl")
+    }
+    #[target_feature(enable = "avx512f,avx512dq,avx512bw,avx512vl")]
+    pub(super) unsafe fn f64_avx512<const POLICY: u8>(input: &[f64], output: &mut [u8]) -> bool {
+        let mut inputs = input.chunks_exact(8);
+        let mut outputs = output.chunks_exact_mut(8);
+        let abs = _mm512_set1_pd(f64::from_bits(0x7fff_ffff_ffff_ffff));
+        let inf = _mm512_set1_pd(f64::INFINITY);
+        let mut finite = u8::MAX;
+        for (input, output) in inputs.by_ref().zip(outputs.by_ref()) {
+            // SAFETY: exact eight-value chunk; loadu permits unaligned reads.
+            let v = unsafe { _mm512_loadu_pd(input.as_ptr()) };
+            finite &= if POLICY == 1 {
+                _mm512_cmp_pd_mask::<_CMP_GT_OQ>(v, _mm512_set1_pd(-1.0))
+                    & _mm512_cmp_pd_mask::<_CMP_LT_OQ>(v, _mm512_set1_pd(256.0))
+            } else {
+                _mm512_cmp_pd_mask::<_CMP_LT_OQ>(_mm512_and_pd(v, abs), inf)
+            };
+            let v = if POLICY == 2 {
+                _mm512_min_pd(_mm512_max_pd(v, _mm512_set1_pd(0.0)), _mm512_set1_pd(255.0))
+            } else {
+                v
+            };
+            // Invalid/out-of-i32 conversion yields INT_MIN; low byte is zero.
+            let bytes = _mm256_cvtepi32_epi8(_mm512_cvttpd_epi32(v));
+            output.copy_from_slice(&_mm_cvtsi128_si64(bytes).to_ne_bytes());
+        }
+        super::scalar_f64::<POLICY>(inputs.remainder(), outputs.into_remainder())
+            | (finite != u8::MAX)
+    }
+    #[target_feature(enable = "avx512f,avx512dq,avx512bw,avx512vl")]
+    pub(super) unsafe fn f32_avx512<const POLICY: u8>(input: &[f32], output: &mut [u8]) -> bool {
+        let mut inputs = input.chunks_exact(16);
+        let mut outputs = output.chunks_exact_mut(16);
+        let abs = _mm512_set1_ps(f32::from_bits(0x7fff_ffff));
+        let inf = _mm512_set1_ps(f32::INFINITY);
+        let mut finite = u16::MAX;
+        for (input, output) in inputs.by_ref().zip(outputs.by_ref()) {
+            // SAFETY: exact sixteen-value chunk; unaligned reads supported.
+            let v = unsafe { _mm512_loadu_ps(input.as_ptr()) };
+            finite &= if POLICY == 1 {
+                _mm512_cmp_ps_mask::<_CMP_GT_OQ>(v, _mm512_set1_ps(-1.0))
+                    & _mm512_cmp_ps_mask::<_CMP_LT_OQ>(v, _mm512_set1_ps(256.0))
+            } else {
+                _mm512_cmp_ps_mask::<_CMP_LT_OQ>(_mm512_and_ps(v, abs), inf)
+            };
+            let v = if POLICY == 2 {
+                _mm512_min_ps(_mm512_max_ps(v, _mm512_set1_ps(0.0)), _mm512_set1_ps(255.0))
+            } else {
+                v
+            };
+            let bytes = _mm512_cvtepi32_epi8(_mm512_cvttps_epi32(v));
+            // SAFETY: output chunk owns exactly sixteen writable bytes; storeu
+            // requires no alignment and retains no pointer beyond this call.
+            unsafe { _mm_storeu_si128(output.as_mut_ptr().cast(), bytes) };
+        }
+        super::scalar_f32::<POLICY>(inputs.remainder(), outputs.into_remainder())
+            | (finite != u16::MAX)
+    }
 
     #[target_feature(enable = "sse2")]
     pub(super) unsafe fn f64_sse2<const POLICY: u8>(input: &[f64], output: &mut [u8]) -> bool {
@@ -266,7 +342,7 @@ mod arm {
         let lower = vdupq_n_f64(-2147483648.0);
         let upper = vdupq_n_f64(2147483648.0);
         let inf = vdupq_n_f64(f64::INFINITY);
-        let mut finite = u64::MAX;
+        let mut finite = vdupq_n_u64(u64::MAX);
         for (input, output) in inputs.by_ref().zip(outputs.by_ref()) {
             // SAFETY: exact two-value chunk; AArch64 loads permit unaligned data.
             let v = unsafe { vld1q_f64(input.as_ptr()) };
@@ -283,7 +359,7 @@ mod arm {
             } else {
                 v
             };
-            finite &= vgetq_lane_u64::<0>(valid) & vgetq_lane_u64::<1>(valid);
+            finite = vandq_u64(finite, valid);
             // NEON FCVTZS saturates. Explicit masks preserve the established
             // zero byte outside i32 range, including NaN/infinity endpoints.
             let range = if POLICY == 0 {
@@ -292,11 +368,13 @@ mod arm {
                 vdupq_n_u64(u64::MAX)
             };
             let integers = vandq_u64(vreinterpretq_u64_s64(vcvtq_s64_f64(v)), range);
-            output[0] = vgetq_lane_u64::<0>(integers) as u8;
-            output[1] = vgetq_lane_u64::<1>(integers) as u8;
+            let words32 = vmovn_u64(integers);
+            let words16 = vmovn_u32(vcombine_u32(words32, words32));
+            let bytes = vmovn_u16(vcombine_u16(words16, words16));
+            output.copy_from_slice(&vget_lane_u16::<0>(vreinterpret_u16_u8(bytes)).to_ne_bytes());
         }
         super::scalar_f64::<POLICY>(inputs.remainder(), outputs.into_remainder())
-            | (finite != u64::MAX)
+            | ((vgetq_lane_u64::<0>(finite) & vgetq_lane_u64::<1>(finite)) != u64::MAX)
     }
     #[target_feature(enable = "neon")]
     pub(super) unsafe fn f32_neon<const POLICY: u8>(input: &[f32], output: &mut [u8]) -> bool {
@@ -305,7 +383,7 @@ mod arm {
         let lower = vdupq_n_f32(-2147483648.0);
         let upper = vdupq_n_f32(2147483648.0);
         let inf = vdupq_n_f32(f32::INFINITY);
-        let mut finite = u32::MAX;
+        let mut finite = vdupq_n_u32(u32::MAX);
         for (input, output) in inputs.by_ref().zip(outputs.by_ref()) {
             // SAFETY: exact four-value chunk, with unaligned reads permitted.
             let v = unsafe { vld1q_f32(input.as_ptr()) };
@@ -317,7 +395,7 @@ mod arm {
             } else {
                 vcltq_f32(vabsq_f32(v), inf)
             };
-            finite &= vminvq_u32(valid);
+            finite = vandq_u32(finite, valid);
             let v = if POLICY == 2 {
                 vminq_f32(vmaxq_f32(v, vdupq_n_f32(0.0)), vdupq_n_f32(255.0))
             } else {
@@ -334,9 +412,13 @@ mod arm {
             output.copy_from_slice(&vget_lane_u32::<0>(vreinterpret_u32_u8(bytes)).to_ne_bytes());
         }
         super::scalar_f32::<POLICY>(inputs.remainder(), outputs.into_remainder())
-            | (finite != u32::MAX)
+            | (vminvq_u32(finite) != u32::MAX)
     }
 }
+
+#[cfg(all(test, target_arch = "aarch64"))]
+#[path = "../tests/neon_before.rs"]
+mod neon_before;
 
 #[cfg(test)]
 mod tests {
@@ -382,6 +464,69 @@ mod tests {
                 |i, o| unsafe { arm::f64_neon::<0>(i, o) },
                 |i, o| unsafe { arm::f32_neon::<0>(i, o) },
             ));
+        }
+        #[cfg(target_arch = "x86_64")]
+        if x86::avx512_available() {
+            // SAFETY: feature detection and benchmark's matched slice lengths.
+            kernels.push((
+                "avx512",
+                |i, o| unsafe { x86::f64_avx512::<0>(i, o) },
+                |i, o| unsafe { x86::f32_avx512::<0>(i, o) },
+            ));
+        }
+        #[cfg(target_arch = "aarch64")]
+        if std::arch::is_aarch64_feature_detected!("neon") {
+            // SAFETY: native ISA guard and equal benchmark buffer lengths.
+            kernels.extend([
+                (
+                    "wrap/neon-before",
+                    (|i, o| unsafe { neon_before::f64_neon::<0>(i, o) }) as F64,
+                    (|i, o| unsafe { neon_before::f32_neon::<0>(i, o) }) as F32,
+                ),
+                (
+                    "strict/neon-before",
+                    (|i, o| unsafe { neon_before::f64_neon::<1>(i, o) }) as F64,
+                    (|i, o| unsafe { neon_before::f32_neon::<1>(i, o) }) as F32,
+                ),
+                (
+                    "clip/neon-before",
+                    (|i, o| unsafe { neon_before::f64_neon::<2>(i, o) }) as F64,
+                    (|i, o| unsafe { neon_before::f32_neon::<2>(i, o) }) as F32,
+                ),
+            ]);
+        }
+        #[cfg(target_arch = "x86_64")]
+        {
+            if std::arch::is_x86_feature_detected!("avx2") {
+                // SAFETY: explicit ISA guard and benchmark's matched lengths.
+                kernels.extend([
+                    (
+                        "strict/avx2",
+                        (|i, o| unsafe { x86::f64_avx2::<1>(i, o) }) as F64,
+                        (|i, o| unsafe { x86::f32_avx2::<1>(i, o) }) as F32,
+                    ),
+                    (
+                        "clip/avx2",
+                        (|i, o| unsafe { x86::f64_avx2::<2>(i, o) }) as F64,
+                        (|i, o| unsafe { x86::f32_avx2::<2>(i, o) }) as F32,
+                    ),
+                ]);
+            }
+            if x86::avx512_available() {
+                // SAFETY: all required features guarded and lengths equal.
+                kernels.extend([
+                    (
+                        "strict/avx512",
+                        (|i, o| unsafe { x86::f64_avx512::<1>(i, o) }) as F64,
+                        (|i, o| unsafe { x86::f32_avx512::<1>(i, o) }) as F32,
+                    ),
+                    (
+                        "clip/avx512",
+                        (|i, o| unsafe { x86::f64_avx512::<2>(i, o) }) as F64,
+                        (|i, o| unsafe { x86::f32_avx512::<2>(i, o) }) as F32,
+                    ),
+                ]);
+            }
         }
         let input: Vec<f64> = (0..150000)
             .map(|i| ((i * 7919) % 256) as f64 + 0.25)
@@ -449,6 +594,14 @@ mod tests {
             kernels.push((
                 |i, o| unsafe { arm::f64_neon::<POLICY>(i, o) },
                 |i, o| unsafe { arm::f32_neon::<POLICY>(i, o) },
+            ));
+        }
+        #[cfg(target_arch = "x86_64")]
+        if x86::avx512_available() {
+            // SAFETY: all required features checked; test inputs/output lengths match.
+            kernels.push((
+                |i, o| unsafe { x86::f64_avx512::<POLICY>(i, o) },
+                |i, o| unsafe { x86::f32_avx512::<POLICY>(i, o) },
             ));
         }
         let boundary = [
@@ -689,6 +842,14 @@ mod tests {
             assert_eq!(out, expected);
             assert!(scalar_f32::<0>(input32, &mut out));
             assert_eq!(out, expected32);
+            #[cfg(target_arch = "x86_64")]
+            if x86::avx512_available() {
+                // SAFETY: feature gate and exact lengths dominate both calls.
+                assert!(unsafe { x86::f64_avx512::<0>(input, &mut out) });
+                assert_eq!(out, expected);
+                assert!(unsafe { x86::f32_avx512::<0>(input32, &mut out) });
+                assert_eq!(out, expected32);
+            }
             #[cfg(target_arch = "x86_64")]
             if std::arch::is_x86_feature_detected!("sse2") {
                 // SAFETY: checked ISA and equal slice lengths.

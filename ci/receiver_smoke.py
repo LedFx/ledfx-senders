@@ -58,6 +58,11 @@ def trial(fps: int) -> dict[str, object]:
             assert received["complete_frames"] <= sent
             return {
                 "scope": "short exploratory receiver smoke, including Python chunk identity marking; no performance gate",
+                "input_dtype": "uint8",
+                "input_format": "B",
+                "input_shape": [150000],
+                "input_layout": "contiguous bytearray of 50000 RGB pixels",
+                "numeric_conversion": "none; byte fast path",
                 "platform": platform.platform(),
                 "machine": platform.machine(),
                 "python": sys.version,

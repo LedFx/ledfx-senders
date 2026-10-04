@@ -45,6 +45,59 @@ def packet(protocol, identity, index=0):
 
 
 class ReceiverTests(unittest.TestCase):
+    def test_e131_mixed_cid_never_completes(self):
+        for backend in ["portable", "batched"]:
+            with (
+                self.subTest(backend=backend),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                fixture = Path(directory) / "fixture"
+                fixture.write_bytes(bytes([7] * 513))
+                receiver = subprocess.Popen(
+                    [str(BINARY), "e131", str(fixture), backend, "32", "0"],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                try:
+                    ready = json.loads(receiver.stdout.readline())
+                    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
+                        destination = ("127.0.0.1", ready["port"])
+                        first = packet("e131", 1, 0)
+                        first[22:38] = bytes([1] * 16)
+                        sender.sendto(first, destination)
+                        second = packet("e131", 1, 1)
+                        second[22:38] = bytes([2] * 16)
+                        sender.sendto(second, destination)
+                        # All three control variants use the wrong CID too.
+                        sync = first[:49]
+                        struct.pack_into("!HI", sync, 16, 0x7021, 8)
+                        struct.pack_into("!HI", sync, 38, 0x700B, 1)
+                        struct.pack_into("!H", sync, 45, 63999)
+                        discovery = bytearray(122)
+                        discovery[:44] = sync[:44]
+                        struct.pack_into("!HI", discovery, 16, 0x706A, 8)
+                        struct.pack_into("!HI", discovery, 38, 0x7054, 2)
+                        struct.pack_into("!HI", discovery, 112, 0x700A, 1)
+                        struct.pack_into("!H", discovery, 120, 1)
+                        termination = first.copy()
+                        termination[112] = 0x40
+                        for control in [sync, discovery, termination]:
+                            control[22:38] = bytes([2] * 16)
+                            sender.sendto(control, destination)
+                    out, err = receiver.communicate("stop 1\n", timeout=5)
+                    self.assertEqual(receiver.returncode, 0, err)
+                    result = json.loads(out)
+                    self.assertEqual(result["complete_frames"], 0)
+                    self.assertEqual(result["incomplete_frames"], 1)
+                    self.assertEqual(result["invalid_packets"], 4)
+                    self.assertEqual(result["sync_packets"], 0)
+                finally:
+                    if receiver.poll() is None:
+                        receiver.kill()
+                        receiver.communicate()
+
     def test_wire_controls_on_both_receive_backends(self):
         for backend in ["portable", "batched"]:
             for protocol in ["ddp", "e131", "opc"]:

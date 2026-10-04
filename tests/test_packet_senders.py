@@ -2,6 +2,7 @@
 
 import socket
 import struct
+import warnings
 from typing import TypeAlias
 
 import numpy as np
@@ -80,12 +81,23 @@ def test_numeric_policy_strides_and_alias(cls: type[Sender], dtype: str) -> None
     frame = np.repeat(frame, 2, axis=0)[::2, ::-1]
     original = frame.copy()
     sender = capture(cls, 6 if cls is DDPSender else 2)
-    sender.send(frame)
-    expected = (
-        frame.astype(np.uint8)
-        if cls is DDPSender
-        else np.clip(frame, 0, 255).astype(np.uint8)
-    )
+    # NumPy's long-double cast warning is platform dependent (Windows aliases
+    # float64). Assert the exact oracle warning rather than suppressing it globally.
+    with warnings.catch_warnings(record=True) as oracle_warnings:
+        warnings.simplefilter("always")
+        expected = (
+            frame.astype(np.uint8)
+            if cls is DDPSender
+            else np.clip(frame, 0, 255).astype(np.uint8)
+        )
+    for warning in oracle_warnings:
+        assert warning.category is RuntimeWarning
+        assert str(warning.message) == "invalid value encountered in cast"
+    if oracle_warnings:
+        with pytest.warns(RuntimeWarning, match="invalid value encountered in cast"):
+            sender.send(frame)
+    else:
+        sender.send(frame)
     packet = sender._engine.captures()[0][0]
     assert packet[10 if cls is DDPSender else 4 :] == expected.tobytes()
     np.testing.assert_array_equal(frame, original)
@@ -203,12 +215,23 @@ def test_finite_boundaries(cls: type[Sender], dtype: str) -> None:
         dtype=dtype,
     )
     sender = capture(cls, 9 if cls is DDPSender else 3)
-    sender.send(frame)
-    expected = (
-        frame.astype(np.uint8)
-        if cls is DDPSender
-        else np.clip(frame, 0, 255).astype(np.uint8)
-    )
+    # NumPy's long-double cast warning is platform dependent (Windows aliases
+    # float64). Assert the exact oracle warning rather than suppressing it globally.
+    with warnings.catch_warnings(record=True) as oracle_warnings:
+        warnings.simplefilter("always")
+        expected = (
+            frame.astype(np.uint8)
+            if cls is DDPSender
+            else np.clip(frame, 0, 255).astype(np.uint8)
+        )
+    for warning in oracle_warnings:
+        assert warning.category is RuntimeWarning
+        assert str(warning.message) == "invalid value encountered in cast"
+    if oracle_warnings:
+        with pytest.warns(RuntimeWarning, match="invalid value encountered in cast"):
+            sender.send(frame)
+    else:
+        sender.send(frame)
     assert (
         sender._engine.captures()[0][0][10 if cls is DDPSender else 4 :]
         == expected.tobytes()

@@ -42,3 +42,7 @@ compare portable/batched modes, receiver CPU and observed loss under a rate ramp
 production packet encoders. After building the binary, run
 `python bench/receiver/test_receiver.py` for malformed/drop/duplicate/reorder
 controls over real loopback with both receive backends and all three protocols.
+
+E131 pins the CID of the first fully validated data or control packet. Data,
+synchronization, discovery and termination from another CID are invalid, even
+when the UDP peer and payload identity match. Malformed data cannot pin a CID.
