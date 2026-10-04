@@ -25,10 +25,27 @@ scalar!(scalar_f32, f32);
 scalar!(scalar_f64, f64);
 
 pub(crate) fn f32(input: &[f32], output: &mut [f32], order: [usize; 3], white: White) {
-    // Routing is finalized from paired measurements on each native architecture.
+    // Native Linux ARM measurements win for white modes. Mac's compiler wins
+    // the large cases; retain its block-SIMD route instead of a size heuristic.
+    #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
+    if white != White::None && std::arch::is_aarch64_feature_detected!("neon") {
+        // SAFETY: ISA guard; validated slices and complete blocks plus scalar tail.
+        unsafe {
+            return neon_f32(input, output, order, white);
+        }
+    }
     scalar_f32(input, output, order, white)
 }
 pub(crate) fn f64(input: &[f64], output: &mut [f64], order: [usize; 3], white: White) {
+    #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
+    if matches!(white, White::Brighter | White::Accurate)
+        && std::arch::is_aarch64_feature_detected!("neon")
+    {
+        // SAFETY: ISA guard; validated slices and complete blocks plus scalar tail.
+        unsafe {
+            return neon_f64(input, output, order, white);
+        }
+    }
     scalar_f64(input, output, order, white)
 }
 
@@ -132,7 +149,7 @@ pub(crate) unsafe fn avx_f64(input: &[f64], output: &mut [f64], order: [usize; 3
     );
 }
 
-#[cfg(all(test, target_arch = "aarch64"))]
+#[cfg(all(target_arch = "aarch64", any(test, target_os = "linux")))]
 #[target_feature(enable = "neon")]
 pub(crate) unsafe fn neon_f32(input: &[f32], output: &mut [f32], order: [usize; 3], white: White) {
     use std::arch::aarch64::*;
@@ -177,7 +194,7 @@ pub(crate) unsafe fn neon_f32(input: &[f32], output: &mut [f32], order: [usize; 
         white,
     );
 }
-#[cfg(all(test, target_arch = "aarch64"))]
+#[cfg(all(target_arch = "aarch64", any(test, target_os = "linux")))]
 #[target_feature(enable = "neon")]
 pub(crate) unsafe fn neon_f64(input: &[f64], output: &mut [f64], order: [usize; 3], white: White) {
     use std::arch::aarch64::*;
@@ -252,6 +269,13 @@ pub(crate) fn u8(input: &[u8], output: &mut [u8], order: [usize; 3], white: Whit
             return ssse3_u8(input, output, order, white);
         }
     }
+    #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
+    if white != White::None && std::arch::is_aarch64_feature_detected!("neon") {
+        // SAFETY: ISA guard; validated slices and complete blocks plus scalar tail.
+        unsafe {
+            return neon_u8(input, output, order, white);
+        }
+    }
     scalar_u8(input, output, order, white)
 }
 
@@ -317,7 +341,7 @@ pub(crate) unsafe fn ssse3_u8(input: &[u8], output: &mut [u8], order: [usize; 3]
         white,
     );
 }
-#[cfg(all(test, target_arch = "aarch64"))]
+#[cfg(all(target_arch = "aarch64", any(test, target_os = "linux")))]
 #[target_feature(enable = "neon")]
 pub(crate) unsafe fn neon_u8(input: &[u8], output: &mut [u8], order: [usize; 3], white: White) {
     use std::arch::aarch64::*;
