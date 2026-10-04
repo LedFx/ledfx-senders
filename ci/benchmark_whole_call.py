@@ -45,27 +45,40 @@ def worker(package):
         pixels = case["pixels"]
         frame = (np.arange(pixels * 3).reshape(pixels, 3) % 256).astype(case["dtype"])
         sender = None
+        captured_hash = None
         if case["protocol"] == "adalight":
             call = lambda frame=frame: encoders.encode_adalight(frame, "BRG")
         elif case["protocol"] == "openrgb":
             call = lambda frame=frame: encoders.encode_openrgb(frame, 0)
         else:
-            sender = ArtNetSender._test_sender(
-                destination="127.0.0.1",
-                port=6454,
-                universe=0,
-                packet_size=512,
-                even_packet_size=True,
-                dmx_start_address=9,
-                pixel_count=pixels,
-                pixels_per_device=case["group"],
-                pre_amble=b"\xff\x80",
-                post_amble=b"\x40",
-                rgb_order="BRG",
-                white_mode=case["white"],
-                broadcast=False,
-                mode="discard",
-            )
+            settings = {
+                "destination": "127.0.0.1",
+                "port": 6454,
+                "universe": 0,
+                "packet_size": 512,
+                "even_packet_size": True,
+                "dmx_start_address": 9,
+                "pixel_count": pixels,
+                "pixels_per_device": case["group"],
+                "pre_amble": b"\xff\x80",
+                "post_amble": b"\x40",
+                "rgb_order": "BRG",
+                "white_mode": case["white"],
+                "broadcast": False,
+            }
+            capture = ArtNetSender._test_sender(**settings, mode="capture")
+            try:
+                capture.send(frame)
+                packets = capture._engine.captures()
+                assert packets
+                packet_digest = hashlib.sha256()
+                for packet, _address in packets:
+                    packet_digest.update(len(packet).to_bytes(4, "big"))
+                    packet_digest.update(packet)
+                captured_hash = packet_digest.hexdigest()
+            finally:
+                capture.close()
+            sender = ArtNetSender._test_sender(**settings, mode="discard")
             call = lambda sender=sender, frame=frame: sender.send(frame)
         try:
             result = call()
@@ -81,7 +94,7 @@ def worker(package):
                         "loops": loops,
                         "encoded_sha256": hashlib.sha256(result).hexdigest()
                         if result is not None
-                        else None,
+                        else captured_hash,
                     }
                 ),
                 flush=True,
@@ -143,6 +156,7 @@ def run(control, candidate, check_only=False):
                     process.stdin.write(json.dumps(case) + "\n")
                     process.stdin.flush()
                     result = json.loads(process.stdout.readline())
+                    assert result["encoded_sha256"] is not None, case
                     hashes.append(result["encoded_sha256"])
                     print(
                         json.dumps({**case, "trial": trial, "route": label, **result}),

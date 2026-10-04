@@ -63,10 +63,18 @@ def main():
                 if after["counts"][3] == 2:
                     break
             assert after["counts"] == [4, 64, 2, 2, 0], after
+            sock.sendto(
+                struct.pack("!BBBBLH", 0x40, 2, 11, 1, 0, 6) + b"abcdef",
+                ("127.0.0.1", ready["port"]),
+            )
         stopped = command("stop")
         process.wait(timeout=5)
         assert process.returncode == 0
-        assert stopped["counts"] == after["counts"]
+        assert stopped["counts"] == [5, 80, 2, 2, 0]
+        assert (
+            stopped["incomplete_assembly_events"]
+            == after["incomplete_assembly_events"] + 1
+        )
         assert after["elapsed_seconds"] > before["elapsed_seconds"]
         print(
             json.dumps(

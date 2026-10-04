@@ -40,8 +40,8 @@ jobs:
         run: |
           PYO3_PYTHON="$(uv python find 3.12)"
           export PYO3_PYTHON
-          uv build --wheel --out-dir candidate-wheels
-          uv build .benchmark-control-source --wheel --out-dir "$PWD/control-wheels"
+          uv build --python 3.12 --wheel --out-dir candidate-wheels
+          uv build .benchmark-control-source --python 3.12 --wheel --out-dir "$PWD/control-wheels"
           uv venv --python 3.12 .measure-env
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             measure_python="$PWD/.measure-env/Scripts/python.exe"

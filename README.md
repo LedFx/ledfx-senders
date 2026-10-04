@@ -296,7 +296,8 @@ available. Rates use the difference between the receiver's two snapshot times.
 Assembly state persists across snapshots, so a completion can include a frame
 started just before the interval. The 4-bit DDP sequence cannot establish unique
 frame identity across wraps or reordered traffic. Incomplete-assembly and gap
-counts are events, not uniquely identified lost frames. The original golden
+counts are events, not uniquely identified lost frames. Final stop counts any
+remaining pending assembly once as an incomplete event. The original golden
 fixture receiver remains available for exact byte/identity validation.
 
 Hosted route measurements freeze both wheels, measured Rust executables, loaded

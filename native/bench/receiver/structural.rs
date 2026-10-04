@@ -83,6 +83,13 @@ impl Assembly {
             self.pending = None;
         }
     }
+    // Final stop turns the unfinished coverage into one incomplete event;
+    // snapshots deliberately keep it pending across measurement boundaries.
+    fn finish(&mut self) {
+        if self.pending.take().is_some() {
+            self.counts.incomplete += 1;
+        }
+    }
     fn invalid(&mut self) {
         self.counts.invalid += 1;
         if self.pending.take().is_some() {
@@ -177,6 +184,7 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             Err(e) => return Err(e.into()),
         }
     }
+    assembly.finish();
     report(
         &assembly,
         &receiver,
@@ -233,6 +241,19 @@ mod tests {
         out.extend_from_slice(&(payload.len() as u16).to_be_bytes());
         out.extend_from_slice(payload);
         out
+    }
+
+    #[test]
+    fn stop_counts_a_pending_assembly_once_as_an_event() {
+        let mut receiver = Assembly::new(4).unwrap();
+        receiver.feed(&packet(1, 0, b"abcdef", false));
+        assert_eq!(receiver.counts.incomplete, 0);
+        receiver.finish();
+        assert_eq!(receiver.counts.incomplete, 1);
+        assert_eq!(receiver.counts.complete, 0);
+        assert!(receiver.pending.is_none());
+        receiver.finish();
+        assert_eq!(receiver.counts.incomplete, 1);
     }
 
     #[test]
