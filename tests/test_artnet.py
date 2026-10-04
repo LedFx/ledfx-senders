@@ -326,3 +326,94 @@ def test_direct_engine_checks_buffer_kind_and_size() -> None:
         with pytest.raises((ValueError, BufferError)):
             s._engine.send(frame, kind)
     assert not s._engine.captures()
+
+
+def test_concurrent_send_close_orders_blackout_after_any_accepted_frame() -> None:
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from ledfx_senders import _native
+
+    s = sender(3, packet_size=2, pre_amble=b"x", post_amble=b"y")
+    gate = _native._TestLockGate()
+    attempted_send, attempted_close = threading.Event(), threading.Event()
+
+    def send() -> None:
+        attempted_send.set()
+        try:
+            s.send(bytes([7]) * 9)
+        except RuntimeError:
+            assert s.closed
+
+    def close() -> None:
+        attempted_close.set()
+        s.close()
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        holder = pool.submit(s._engine._test_hold_lock, gate)
+        gate.wait_entered()
+        sending, closing = pool.submit(send), pool.submit(close)
+        try:
+            assert attempted_send.wait(2) and attempted_close.wait(2)
+        finally:
+            gate.release()
+        holder.result(timeout=7)
+        sending.result(timeout=7)
+        closing.result(timeout=7)
+    assert s.closed and not gate.timed_out
+    payloads = [decode(p)[2] for p, _ in s._engine.captures()]
+    assert len(payloads) in (6, 12)
+    assert payloads[-6:] == [b"\0\0"] * 6
+    if len(payloads) == 12:
+        assert b"".join(payloads[:6]) == b"x" + bytes([7]) * 9 + b"y\0"
+
+
+@pytest.mark.parametrize(
+    "size,even",
+    [(1, False), (1, True), (2, True), (3, False), (3, True), (510, True), (512, True)],
+)
+def test_small_layouts_have_drained_exact_loopback_receipts(
+    size: int, even: bool
+) -> None:
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as receiver:
+        receiver.bind(("127.0.0.1", 0))
+        receiver.settimeout(1)
+        s = sender(
+            3,
+            port=receiver.getsockname()[1],
+            packet_size=size,
+            even_packet_size=even,
+            mode="socket",
+        )
+        frame = bytes(range(1, 10))
+        s.send(frame)
+        count = (len(frame) + size - 1) // size
+        wire = max(2, size + (size % 2 if even else 0))
+        for index in range(count):
+            address, sequence, payload = decode(receiver.recvfrom(65535)[0])
+            assert (address, sequence) == (254 + index, index)
+            chunk = frame[index * size : (index + 1) * size]
+            assert payload == chunk + bytes(wire - len(chunk))
+        s.close(False)
+        receiver.settimeout(0.02)
+        with pytest.raises(socket.timeout):
+            receiver.recvfrom(65535)
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
+def test_every_invalid_lane_including_vector_tail_rejects_atomically(
+    dtype: str,
+) -> None:
+    s = sender(19, white_mode="Accurate", rgb_order="GBR")
+    data = np.ones((19, 3), dtype=dtype)
+    s.send(data)
+    committed = s._engine.committed_copy()
+    for channel in range(data.size):
+        data.ravel()[channel] = np.nan
+        with pytest.raises(ValueError, match="nonfinite"):
+            s.send(data)
+        data.ravel()[channel] = 1
+        assert s._engine.committed_copy() == committed
+        assert len(s._engine.captures()) == 1
