@@ -47,7 +47,10 @@ def worker(package):
         sender = None
         captured_hash = None
         if case["protocol"] == "adalight":
-            call = lambda frame=frame: encoders.encode_adalight(frame, "BRG")
+            order = case["order"]
+            call = lambda frame=frame, order=order: encoders.encode_adalight(
+                frame, order
+            )
         elif case["protocol"] == "openrgb":
             call = lambda frame=frame: encoders.encode_openrgb(frame, 0)
         else:
@@ -158,8 +161,24 @@ def run(control, candidate, check_only=False):
             for pixels in (1, 30, 127, 128, 129, 170, 1024, 50000):
                 for dtype in ("uint8", "float64"):
                     cases.append(
-                        {"protocol": protocol, "pixels": pixels, "dtype": dtype}
+                        {
+                            "protocol": protocol,
+                            "pixels": pixels,
+                            "dtype": dtype,
+                            **({"order": "BRG"} if protocol == "adalight" else {}),
+                        }
                     )
+        # Actual default order: retain BRG controls and add only four RGB cases.
+        for pixels in (170, 50000):
+            for dtype in ("uint8", "float64"):
+                cases.append(
+                    {
+                        "protocol": "adalight",
+                        "pixels": pixels,
+                        "dtype": dtype,
+                        "order": "RGB",
+                    }
+                )
         for pixels in (170, 50000):
             for white in ("None", "Accurate"):
                 for group in (0, 1, 3, 7, 8, 9, 10, 11, 16, 64, 170):

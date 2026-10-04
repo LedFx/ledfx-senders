@@ -250,6 +250,9 @@ const MEASURED_PACKING: bool = cfg!(any(
     )
 ));
 fn pack_adalight(rgb: &[u8], count: usize, indices: [usize; 3]) -> Vec<u8> {
+    if indices == [0, 1, 2] {
+        return pack_adalight_identity(rgb, count);
+    }
     if MEASURED_PACKING && count >= 128 {
         pack_adalight_bulk(rgb, count, indices)
     } else {
@@ -262,6 +265,14 @@ fn pack_openrgb(rgb: &[u8], count: usize, device_id: u32) -> Vec<u8> {
     } else {
         pack_openrgb_reference(rgb, count, device_id)
     }
+}
+
+fn pack_adalight_identity(rgb: &[u8], count: usize) -> Vec<u8> {
+    let [high, low] = ((count - 1) as u16).to_be_bytes();
+    let mut output = Vec::with_capacity(6 + rgb.len());
+    output.extend_from_slice(&[b'A', b'd', b'a', high, low, high ^ low ^ 0x55]);
+    output.extend_from_slice(rgb);
+    output
 }
 
 fn pack_adalight_reference(rgb: &[u8], count: usize, indices: [usize; 3]) -> Vec<u8> {
@@ -403,6 +414,25 @@ mod tests {
                         );
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn identity_adalight_copy_preserves_headers_offsets_and_tails() {
+        for (pixels, header) in [
+            (1, [65, 100, 97, 0, 0, 85]),
+            (17, [65, 100, 97, 0, 16, 69]),
+            (129, [65, 100, 97, 0, 128, 213]),
+            (65536, [65, 100, 97, 255, 255, 85]),
+        ] {
+            for offset in 0..32 {
+                let source: Vec<u8> = (0..pixels * 3 + offset).map(|i| (i * 79) as u8).collect();
+                let rgb = &source[offset..];
+                let encoded = pack_adalight_identity(rgb, pixels);
+                assert_eq!(&encoded[..6], &header);
+                assert_eq!(&encoded[6..], rgb);
+                assert_eq!(encoded, pack_adalight_reference(rgb, pixels, [0, 1, 2]));
             }
         }
     }
