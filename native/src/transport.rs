@@ -35,6 +35,19 @@ pub struct SocketTransport {
     storage: std::cell::RefCell<BatchStorage>,
 }
 impl SocketTransport {
+    pub fn set_broadcast(&self, enabled: bool) -> io::Result<()> {
+        self.socket
+            .as_ref()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "socket closed"))?
+            .set_broadcast(enabled)
+    }
+    pub fn broadcast(&self) -> io::Result<bool> {
+        self.socket
+            .as_ref()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "socket closed"))?
+            .broadcast()
+    }
+
     /// Test seam: all multicast uses the loopback interface, never the LAN.
     pub fn loopback_multicast(&self) -> io::Result<()> {
         let socket = self

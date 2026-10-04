@@ -1,4 +1,6 @@
 //! Native packet engine for the independent ledfx-senders distribution.
+pub mod artnet;
+mod artnet_numeric;
 pub mod buffer;
 mod change_mask;
 mod convert;
@@ -36,6 +38,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<buffer::PacketBanks>()?;
     module.add_class::<Engine>()?;
     module.add_class::<ddp::PacketEngine>()?;
+    module.add_class::<artnet::ArtNetEngine>()?;
     module.add_class::<realtime::StatefulEngine>()?;
     module.add_class::<test_gate::TestLockGate>()?;
     module.add_function(wrap_pyfunction!(engine_info, module)?)?;

@@ -195,3 +195,40 @@ and closed-state checks still happen first. Rare and cross-dtype inputs retain
 full validation before comparison; realtime refresh also retains conversion so
 failed attempts cannot contaminate a later keepalive. Static OSC can still cost
 more than the former borrowed-array equality check because snapshots are owned.
+
+### Art-Net
+
+`ledfx_senders.packet_senders.ArtNetSender` owns a synchronous IPv4 UDP socket
+and caches the complete ArtDmx layout. Its keyword configuration is
+`destination`, `port`, `universe`, `packet_size`, `even_packet_size`,
+`dmx_start_address` (one based), `pixel_count`, `pixels_per_device`, `pre_amble`
+and `post_amble` (bytes), `rgb_order`, `white_mode`, and `broadcast`.
+`send(frame)` accepts the configured RGB shape or an unsigned-byte buffer.
+All six RGB permutations and None/Zero/Brighter/Accurate white modes are supported.
+
+The logical universe stride remains `packet_size` (1–512). Wire payloads have a
+minimum of two bytes and round up to even when requested; added bytes are zero,
+never borrowed from the next logical universe. This repairs the former size-1
+and odd-plus-even cases that silently submitted mismatched buffers to the legacy
+library. Odd payload lengths with `even_packet_size=False` and the original
+0–255 packet sequence cycle remain compatibility modes, not a claim of strict
+Art-Net conformance. Addresses cover the full 15-bit range; the entire span must
+fit. Start offset precedes the whole layout, ambles repeat per complete device
+group, and an incomplete final group is omitted. All input channels are validated.
+
+White extraction/subtraction precedes byte conversion at original precision.
+Integers preserve exact minimum and original-width subtraction's low byte,
+including signed overflow. Floats truncate modulo 256 in `[-2**31, 2**31)`;
+other finite values become zero. Nonfinite input or arithmetic output rejects
+atomically. This defines previously platform-dependent out-of-range NumPy casts.
+Bool Accurate subtraction raises TypeError. Common formats use native arithmetic;
+float16 and longdouble use bulk NumPy arithmetic at original precision followed
+by deterministic byte normalization. Byte order conversion preserves float width.
+
+A send has one 200ms transport deadline. Accepted packets advance sequence;
+unsent packets do not, and only a complete frame replaces committed state.
+`close(blackout=True)` waits for any current frame, then uses a separate 200ms
+cleanup budget to clear **every** configured universe, including ambles and
+padding. It always closes after partial/failed cleanup; diagnostics are retained.
+Repeated close is harmless and subsequent sends fail. Waiting for an in-flight
+send plus cleanup can therefore exceed 200ms. `close(False)` omits blackout.

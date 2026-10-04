@@ -10,6 +10,7 @@ mod stateful;
 pub enum Protocol {
     Ddp,
     E131,
+    ArtNet,
     Opc,
     OscOne,
     OscThree,
@@ -27,6 +28,7 @@ impl Protocol {
         match s {
             "ddp" => Ok(Self::Ddp),
             "e131" => Ok(Self::E131),
+            "artnet" => Ok(Self::ArtNet),
             "opc" => Ok(Self::Opc),
             "osc-one" => Ok(Self::OscOne),
             "osc-three" => Ok(Self::OscThree),
@@ -73,7 +75,7 @@ impl Protocol {
     pub fn chunk_size(self, count: usize) -> usize {
         match self {
             Self::Ddp => 1440,
-            Self::E131 => 510,
+            Self::E131 | Self::ArtNet => 510,
             Self::Opc | Self::OscAll => count,
             Self::OscOne | Self::OscThree => 12,
             Self::OscChannels => 4,
@@ -176,7 +178,13 @@ impl Oracle {
         let osc_tags = stateful::tags(protocol, count);
         let chunk_size = protocol.chunk_size(count);
         let chunks = count.div_ceil(chunk_size);
-        let smallest = (count - (chunks - 1) * chunk_size).min(8);
+        let tail = count - (chunks - 1) * chunk_size;
+        if protocol == Protocol::ArtNet && (tail < 12 || chunks > 32768) {
+            return Err(
+                "Art-Net capacity fixtures need 8-byte frame ID plus 4-byte universe marker in every payload",
+            );
+        }
+        let smallest = tail.min(8);
         if smallest < 3 {
             return Err("benchmark requires at least three identity bytes in every chunk");
         }
@@ -233,6 +241,30 @@ impl Oracle {
                     payload: Cow::Borrowed(&p[10..]),
                     index: start / 1440,
                     sequence: Some(p[1]),
+                }))
+            }
+            Protocol::ArtNet => {
+                if p.len() != 528
+                    || &p[..12] != b"Art-Net\0\x00\x50\x00\x0e"
+                    || p[13] != 0
+                    || p[16..18] != [1, 254]
+                {
+                    return Err(());
+                }
+                let index = u16::from_le_bytes([p[14], p[15]]) as usize;
+                if index >= self.chunks {
+                    return Err(());
+                }
+                let used = (count - index * 510).min(510);
+                if p[18 + used..].iter().any(|b| *b != 0)
+                    || u32::from_be_bytes(p[26..30].try_into().unwrap()) as usize != index
+                {
+                    return Err(());
+                }
+                Ok(Packet::Data(Data {
+                    payload: Cow::Borrowed(&p[18..18 + used]),
+                    index,
+                    sequence: Some(p[12]),
                 }))
             }
             Protocol::Opc => {
@@ -406,6 +438,12 @@ impl Oracle {
         let sequence = match self.protocol {
             Protocol::Ddp => Some((id % 15 + 1) as u8),
             Protocol::E131 => Some(((id - 1) % 256) as u8),
+            Protocol::ArtNet => Some(
+                ((id - 1)
+                    .wrapping_mul(self.chunks as u64)
+                    .wrapping_add(data.index as u64)
+                    % 256) as u8,
+            ),
             _ => None,
         };
         if data.sequence != sequence {
@@ -708,5 +746,49 @@ mod tests {
         valid[22..38].fill(1);
         o.feed(&valid, now);
         assert_eq!(o.source_cid, Some([1; 16]));
+    }
+}
+
+#[cfg(test)]
+mod artnet_tests {
+    use super::*;
+    fn fixture() -> Vec<u8> {
+        let mut f = vec![7; 1020];
+        f[8..12].copy_from_slice(&0u32.to_be_bytes());
+        f[518..522].copy_from_slice(&1u32.to_be_bytes());
+        f
+    }
+    fn packet(id: u64, index: usize) -> Vec<u8> {
+        let mut p = vec![0; 528];
+        p[..12].copy_from_slice(b"Art-Net\0\x00\x50\x00\x0e");
+        p[12] = ((id - 1) * 2 + index as u64) as u8;
+        p[14..16].copy_from_slice(&(index as u16).to_le_bytes());
+        p[16..18].copy_from_slice(&510u16.to_be_bytes());
+        p[18..].copy_from_slice(&fixture()[index * 510..(index + 1) * 510]);
+        p[18..26].copy_from_slice(&id.to_be_bytes());
+        p
+    }
+    #[test]
+    fn wide_identity_universe_marker_wrap_duplicates_and_corruption() {
+        let now = Instant::now();
+        let mut o = Oracle::new(Protocol::ArtNet, fixture(), 0, 512, now).unwrap();
+        o.feed(&packet(1, 0), now);
+        o.feed(&packet(129, 1), now);
+        assert_eq!(o.counts.complete, 0);
+        o.feed(&packet(129, 0), now);
+        assert_eq!(o.counts.complete, 1);
+        o.feed(&packet(129, 0), now);
+        assert_eq!(o.counts.duplicates, 1);
+        for offset in [0, 10, 13, 14, 15, 16, 17, 26, 27, 28, 29, 40] {
+            let mut p = packet(130, 0);
+            p[offset] ^= 1;
+            o.feed(&p, now);
+        }
+        assert_eq!(o.counts.invalid, 12);
+        assert_eq!(o.counts.complete, 1);
+        let mut p = packet(130, 0);
+        p[12] ^= 1;
+        o.feed(&p, now);
+        assert_eq!(o.counts.wrong_sequence, 1);
     }
 }
