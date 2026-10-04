@@ -1,6 +1,7 @@
 //! Native packet engine for the independent ledfx-senders distribution.
 pub mod buffer;
 pub mod sender;
+mod test_gate;
 pub mod transport;
 use crate::buffer::Banks;
 use crate::sender::{Sender, Transport};
@@ -26,6 +27,7 @@ fn engine_info(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<buffer::PacketBanks>()?;
     module.add_class::<Engine>()?;
+    module.add_class::<test_gate::TestLockGate>()?;
     module.add_function(wrap_pyfunction!(engine_info, module)?)?;
     Ok(())
 }
@@ -101,6 +103,23 @@ fn construct(
 }
 #[pymethods]
 impl Engine {
+    fn _test_hold_lock(&self, py: Python<'_>, gate: &test_gate::TestLockGate) -> PyResult<()> {
+        let shared = std::sync::Arc::clone(&gate.shared);
+        // Only Rust state is used detached. Drop the real engine guard before
+        // reattaching even on timeout, so a broken GIL-held waiter cannot wedge
+        // the diagnostic helper itself. No production path checks this gate.
+        py.detach(|| {
+            let guard = self
+                .inner
+                .try_lock()
+                .map_err(|_| "engine must be idle before installing the test gate")?;
+            let result = shared.hold();
+            drop(guard);
+            result
+        })
+        .map_err(PyRuntimeError::new_err)
+    }
+
     fn _test_loopback_multicast(&self, py: Python<'_>) -> PyResult<()> {
         let sender = self
             .inner

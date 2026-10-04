@@ -42,7 +42,9 @@ archs = "native"
 # FT 3.14+ is enabled by default; cibuildwheel 4 removed experimental 3.13t.
 # 3.15 is explicitly selected even with cibuildwheel releases from its beta period.
 enable = ["cpython-prerelease"]
-test-requires = ["pytest>=8,<10", "hypothesis"]
+# Exact pins avoid cmd.exe interpreting range operators in cibuildwheel's
+# Windows shell=True pip invocation. Keep aligned with the tested dev lock.
+test-requires = ["pytest==9.1.1", "hypothesis==6.168.0"]
 test-command = "python -I {project}/ci/native_wheel_smoke.py && python -I -m pytest --noconftest {project}/tests -q"
 
 [tool.cibuildwheel.linux]
@@ -50,6 +52,16 @@ manylinux-x86_64-image = "quay.io/pypa/manylinux_2_28_x86_64@sha256:39df0042d5cc
 manylinux-aarch64-image = "quay.io/pypa/manylinux_2_28_aarch64@sha256:f5f03dedf61b47d69d0742d36047db78adeee3bdb7a9910ff52304750ecf2514"
 before-all = "bash {project}/ci/install-native-rust.sh"
 environment = { CARGO_TARGET_DIR = "/tmp/ledfx-native-target", CARGO_HOME = "/opt/ledfx-cargo", RUSTUP_HOME = "/opt/ledfx-rustup", PATH = "/opt/ledfx-cargo/bin:$PATH" }
+
+# Rust's x86_64 floor is 10.12. cibuildwheel raises this to each interpreter's
+# own floor (3.12–3.13: 10.13; 3.14+: 10.15). ARM starts at macOS 11.
+[[tool.cibuildwheel.overrides]]
+select = "*-macosx_x86_64"
+environment = { MACOSX_DEPLOYMENT_TARGET = "10.12" }
+
+[[tool.cibuildwheel.overrides]]
+select = "*-macosx_arm64"
+environment = { MACOSX_DEPLOYMENT_TARGET = "11.0" }
 
 [tool.pyrefly]
 preset = "strict"

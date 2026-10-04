@@ -129,7 +129,7 @@ def test_real_loopback_all_packets_use_same_state_machine(backend: str):
         assert all(receiver.recv(2048)[112] == 64 for _ in range(9))
 
 
-def test_concurrent_direct_native_calls_and_python_heartbeat():
+def test_concurrent_direct_native_send_service_close():
     sender = E131Sender._test_sender(
         ChannelLayout(50000),
         destination="127.0.0.1",
@@ -139,18 +139,8 @@ def test_concurrent_direct_native_calls_and_python_heartbeat():
     import faulthandler
 
     faulthandler.dump_traceback_later(10, exit=True)
-    stop = threading.Event()
     started = threading.Event()
     barrier = threading.Barrier(2)
-    beats = []
-
-    def heartbeat():
-        while not stop.is_set():
-            beats.append(1)
-            stop.wait(0.001)
-
-    thread = threading.Thread(target=heartbeat)
-    thread.start()
 
     def send():
         barrier.wait()
@@ -171,14 +161,13 @@ def test_concurrent_direct_native_calls_and_python_heartbeat():
         assert started.wait(5)
         sender.close()
 
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        futures = [pool.submit(send), pool.submit(service), pool.submit(close)]
-        for future in futures:
-            future.result(timeout=10)
-    faulthandler.cancel_dump_traceback_later()
-    stop.set()
-    thread.join(timeout=2)
-    assert len(beats) > 1
+    try:
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures = [pool.submit(send), pool.submit(service), pool.submit(close)]
+            for future in futures:
+                future.result(timeout=10)
+    finally:
+        faulthandler.cancel_dump_traceback_later()
     assert sender.closed
 
 
@@ -404,3 +393,60 @@ def test_service_before_first_complete_frame_is_idle():
     sender.service(100)
     captures = sender._engine.captures()
     assert captures[4][1] == "239.255.250.214:5568"
+
+
+@pytest.mark.parametrize("operation", ["send", "service", "close"])
+def test_contended_native_calls_allow_python_progress(operation: str) -> None:
+    import faulthandler
+
+    from ledfx_senders import _native
+
+    sender = make_sender()
+    engine = sender._engine
+    frame = bytes([4, 5, 6])
+    engine.send(frame, 0.0)
+    before = engine.counters()
+    gate = _native._TestLockGate()
+    attempted = threading.Event()
+    completed = threading.Event()
+
+    def contend() -> None:
+        attempted.set()
+        if operation == "send":
+            engine.send(frame, 0.1)
+        elif operation == "service":
+            engine.service(1.0)
+        else:
+            engine.close(False, 1.0)
+        completed.set()
+
+    # Prevent a periodic interpreter switch between attempted.set() and the
+    # actual native call. The controller must regain Python execution from the
+    # contended production mutex acquisition, not a test-side sleep or wait.
+    interval = sys.getswitchinterval()
+    faulthandler.dump_traceback_later(15, exit=True)
+    try:
+        sys.setswitchinterval(30)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            holder = pool.submit(engine._test_hold_lock, gate)
+            gate.wait_entered()
+            waiter = pool.submit(contend)
+            try:
+                assert attempted.wait(2)
+                assert not gate.timed_out
+                assert not completed.is_set()
+            finally:
+                gate.release()
+            holder.result(timeout=7)
+            waiter.result(timeout=7)
+        assert completed.is_set()
+        assert not gate.timed_out
+        assert engine.counters()[0] > before[0]
+        assert engine.closed == (operation == "close")
+        if operation != "close":
+            assert [p[126] for p in engine.committed_copy()] == [4, 5, 6]
+    finally:
+        sys.setswitchinterval(interval)
+        gate.release()
+        sender.close(False)
+        faulthandler.cancel_dump_traceback_later()
