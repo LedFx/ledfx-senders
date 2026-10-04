@@ -41,12 +41,17 @@ jobs:
           cargo test --locked --release --lib change_mask::tests
           cargo test --locked --release --lib original::tests
           cargo test --locked --release --lib artnet
+          cargo test --locked --release --lib encoders
+          cargo test --locked --release --lib nanoleaf
           cargo test --locked --release --lib convert::tests::benchmark_supported_kernels -- --ignored --exact --nocapture --test-threads=1 | tee simd-results.log
           cargo test --locked --release --lib osc_numeric::tests::benchmark_osc_kernels -- --ignored --exact --nocapture --test-threads=1 | tee osc-simd-results.log
           cargo test --locked --release --lib original::tests::benchmark_stateful_kernels -- --ignored --exact --nocapture --test-threads=1 | tee original-results.log
           cargo test --locked --release --lib change_mask::tests::benchmark_change_masks -- --ignored --exact --nocapture --test-threads=1 | tee mask-results.log
           cargo test --locked --release --lib artnet_numeric::tests::benchmark_artnet_transforms -- --ignored --exact --nocapture --test-threads=1 | tee artnet-simd-results.log
           cargo test --locked --release --lib artnet::tests::benchmark_artnet_stages -- --ignored --exact --nocapture --test-threads=1 | tee artnet-stage-results.log
+          cargo test --locked --release --lib encoders::tests::benchmark_vendor_stages -- --ignored --exact --nocapture --test-threads=1 | tee vendor-stage-results.log
+          cargo test --locked --release --lib encoders::tests::benchmark_bulk_packing -- --ignored --exact --nocapture --test-threads=1 | tee vendor-packing-results.log
+          cargo test --locked --release --lib artnet::tests::benchmark_short_spans -- --ignored --exact --nocapture --test-threads=1 | tee short-span-results.log
           cargo rustc --locked --release --lib --crate-type rlib -- --emit=asm
       - name: Short native receiver smoke outside the development host
         shell: bash
@@ -55,6 +60,7 @@ jobs:
           export PYO3_PYTHON
           cargo build --locked --release --manifest-path native/Cargo.toml --bin ledfx-receiver
           uv run --no-project --with . --python 3.12 python ci/receiver_smoke.py | tee native/receiver-results.log
+          uv run --no-project --with . --python 3.12 python ci/benchmark_vendor_gather.py | tee native/vendor-gather-results.log
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
@@ -66,5 +72,9 @@ jobs:
             native/mask-results.log
             native/artnet-simd-results.log
             native/artnet-stage-results.log
+            native/vendor-stage-results.log
+            native/vendor-packing-results.log
+            native/short-span-results.log
+            native/vendor-gather-results.log
             native/target/release/deps/_native*.s
             native/receiver-results.log

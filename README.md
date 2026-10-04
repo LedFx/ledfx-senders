@@ -232,3 +232,51 @@ cleanup budget to clear **every** configured universe, including ambles and
 padding. It always closes after partial/failed cleanup; diagnostics are retained.
 Repeated close is harmless and subsequent sends fail. Waiting for an in-flight
 send plus cleanup can therefore exceed 200ms. `close(False)` omits blackout.
+
+## Vendor encoders and Nanoleaf
+
+`ledfx_senders.encoders` provides `encode_adalight(frame, color_order)`,
+`encode_openrgb(frame, device_id)`, `encode_hue(frame, entertainment_id,
+channel_ids, sequence)`, and `encode_govee(frame, stretch)`. Each returns owned
+`bytes`; the caller keeps its serial, OpenRGB v3 TCP, Hue DTLS or Govee shared
+socket session. `RGBGather(permutation).encode(frame)` caches an immutable RGB
+permutation for SDK-owned streaming; it does not implement SDK transport.
+
+Inputs are RGB ndarrays of shape `(N, 3)` or contiguous unsigned byte buffers.
+Strided arrays are normalized; complex/object/structured arrays are rejected.
+Adalight, OpenRGB, Govee and RGBGather preserve integer low bytes. Finite floats
+in `[-2**31, 2**31)` truncate toward zero then wrap modulo 256; finite values
+outside this domain become zero. This explicit exceptional-float policy replaces
+platform-dependent NumPy casts. Nonfinite values fail before output. Hue instead
+requires integers 0..255 or floats strictly between -1 and 256. Its first
+nonfinite channel retains Python `int` exception precedence: NaN -> ValueError,
+infinity -> OverflowError, even after an earlier finite out-of-range channel.
+Hue IDs are a 36-character ASCII UUID and unique u8 channel IDs. The application
+keeps its existing sequence policy; this encoder accepts any u8 sequence.
+
+Adalight supports 1..65536 pixels and writes N-1 in its count field, as decoded by
+[Adafruit's original receiver](https://github.com/adafruit/Adalight/blob/b9d88f8a05e5a3099e9b855cea88b3b29351652c/Arduino/LEDstream/LEDstream.pde#L183-L189).
+This corrects LedFx's former N header. OpenRGB supports 1..65535 pixels and u32
+device IDs. Explicit little-endian UPDATELEDS fields match the current v3 session
+and supported little-endian fleet; upstream native memcpy does not establish a
+cross-endian protocol guarantee. Govee supports 1..255 segments with LedFx's
+existing reverse-engineered BB00FAB0/XOR/base64/JSON representation. Encode speed
+is not serial baud rate, encrypted-session throughput or physical-device FPS.
+
+`ledfx_senders.nanoleaf.NanoleafSender(destination=..., port=..., version=...,
+panel_ids=(...))` owns UDP output and provides `send(frame)` and `close()`.
+Panel IDs must be unique and frame size must match the immutable layout.
+V1 allows 1..255 panels with u8 IDs; v2 allows 1..8188 with u16 IDs, limited by
+the 65507-byte IPv4 UDP payload ceiling. Values clamp to 0..255 and truncate;
+nonfinite input rejects atomically. Large finite values clamp rather than relying
+on a signed-integer cast overflowing. V1 emits the documented nFrames=1 byte,
+correcting LedFx's former zero, with white=0 and transition=1. V2 retains
+white=0 and transition=0. REST activation and HTTP animation remain with callers.
+The [manufacturer's API documentation](https://nanoleaf.atlassian.net/wiki/spaces/nlapid/pages/2789310530/Nanoleaf+Light+Panels+Open+API+Documentation)
+(version 8, 2026-07-08) recommends streaming no faster than 10 Hz; benchmark CPU
+capacity is not a firmware or hardware-rate claim. Large datagrams are tested
+for encoding bounds separately from small loopback delivery.
+
+The new encoders reuse previously measured float conversion dispatch. Additional
+portable packing candidates are test-only until paired x86-64 and ARM64 results
+justify selection. No 32-bit ARM execution or performance validation is claimed.

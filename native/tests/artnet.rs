@@ -1,4 +1,5 @@
 use super::*;
+use std::hint::black_box;
 #[test]
 fn logical_stride_does_not_include_wire_padding() {
     let mut l = Layout::new(1, 32765, 1, true, 1, 0, &[], &[], "RGB", "None").unwrap();
@@ -188,6 +189,131 @@ fn benchmark_artnet_stages() {
                     println!(
                         "artnet-stage grouped={grouped} pixels={pixels} kind={kind} trial={trial} numeric_ns={numeric_ns} pack_ns={pack_ns} discard_ns={}",
                         start.elapsed().as_nanos() / n
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn short_copy_matches_every_length_and_unaligned_offset() {
+    for n in 0..=512 {
+        for offset in 0..32 {
+            let input: Vec<u8> = (0..n + offset).map(|i| (i * 79) as u8).collect();
+            let mut actual = vec![0xa5; n + offset + 8];
+            let mut expected = actual.clone();
+            expected[offset..offset + n].copy_from_slice(&input[offset..]);
+            short_copy(&mut actual[offset..offset + n], &input[offset..]);
+            assert_eq!(actual, expected, "n={n} offset={offset}");
+        }
+    }
+}
+
+#[test]
+fn short_span_layout_preserves_padding_ambles_and_tails() {
+    for group in [0, 1, 3, 7, 16, 64, 170] {
+        for start in [1, 9, 512] {
+            let mut layout = Layout::new(
+                1013,
+                0,
+                511,
+                true,
+                start,
+                group,
+                &[255, 128],
+                &[64],
+                "BRG",
+                "Accurate",
+            )
+            .unwrap();
+            let input: Vec<u8> = (0..layout.output_count).map(|i| (i * 71) as u8).collect();
+            layout.pack(&input);
+            let expected = layout.packets.clone();
+            // Reset channel spans only; headers, ambles and wire padding stay.
+            for &(packet, slot, _, n) in &layout.spans {
+                layout.packets[packet][slot..slot + n].fill(0);
+            }
+            pack_short_spans(&mut layout, &input);
+            assert_eq!(layout.packets, expected);
+        }
+    }
+}
+
+#[inline]
+fn short_copy(output: &mut [u8], input: &[u8]) {
+    let n = output.len();
+    assert_eq!(n, input.len());
+    match n {
+        0 => {}
+        1 => output[0] = input[0],
+        2 => output.copy_from_slice(input),
+        3 => {
+            output[..2].copy_from_slice(&input[..2]);
+            output[2] = input[2];
+        }
+        4..=7 => {
+            output[..4].copy_from_slice(&input[..4]);
+            output[n - 4..].copy_from_slice(&input[n - 4..]);
+        }
+        8..=15 => {
+            output[..8].copy_from_slice(&input[..8]);
+            output[n - 8..].copy_from_slice(&input[n - 8..]);
+        }
+        16..=32 => {
+            output[..16].copy_from_slice(&input[..16]);
+            output[n - 16..].copy_from_slice(&input[n - 16..]);
+        }
+        _ => output.copy_from_slice(input),
+    }
+}
+fn pack_short_spans(layout: &mut Layout, input: &[u8]) {
+    for &(packet, slot, source, n) in &layout.spans {
+        short_copy(
+            &mut layout.packets[packet][slot..slot + n],
+            &input[source..source + n],
+        );
+    }
+}
+
+#[test]
+#[ignore = "paired bounded short-span candidate, no production selection"]
+fn benchmark_short_spans() {
+    for pixels in [170, 50000] {
+        for group in [0, 1, 3, 7, 16, 64, 170] {
+            let mut layout = Layout::new(
+                pixels,
+                0,
+                512,
+                true,
+                9,
+                group,
+                &[255, 128],
+                &[64],
+                "BRG",
+                "Accurate",
+            )
+            .unwrap();
+            let input = vec![17; layout.output_count];
+            let loops = if pixels == 170 { 10000 } else { 500 };
+            for trial in 0..7 {
+                for candidate in if trial % 2 == 0 {
+                    [false, true]
+                } else {
+                    [true, false]
+                } {
+                    let began = Instant::now();
+                    for _ in 0..loops {
+                        if candidate {
+                            pack_short_spans(&mut layout, black_box(&input));
+                        } else {
+                            layout.pack(black_box(&input));
+                        }
+                        black_box(&layout.packets);
+                    }
+                    println!(
+                        "short-span pixels={pixels} group={group} trial={trial} candidate={candidate} ns={}",
+                        began.elapsed().as_nanos() / loops
                     );
                 }
             }
