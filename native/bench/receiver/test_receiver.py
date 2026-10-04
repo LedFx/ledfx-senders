@@ -45,6 +45,89 @@ def packet(protocol, identity, index=0):
 
 
 class ReceiverTests(unittest.TestCase):
+    def test_stateful_literal_receipts_on_both_backends(self):
+        for backend in ["portable", "batched"]:
+            for protocol in [
+                "osc-one",
+                "osc-three",
+                "osc-channels",
+                "osc-all",
+                "udp-drgb",
+                "udp-warls",
+                "udp-drgbw",
+                "udp-dnrgb",
+                "udp-raw",
+                "udp-adaptive",
+            ]:
+                with (
+                    self.subTest(protocol=protocol, backend=backend),
+                    tempfile.TemporaryDirectory() as directory,
+                ):
+                    is_osc = protocol.startswith("osc-")
+                    count = 1470 if protocol == "udp-dnrgb" else 6
+                    fixture = Path(directory) / "fixture"
+                    fixture.write_bytes(
+                        struct.pack(">f", 0.5) * 6 if is_osc else bytes([7]) * count
+                    )
+                    receiver = subprocess.Popen(
+                        [str(BINARY), protocol, str(fixture), backend, "32", "1"],
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+                    try:
+                        ready = json.loads(receiver.stdout.readline())
+                        if is_osc:
+                            width = (
+                                1
+                                if protocol == "osc-channels"
+                                else 6
+                                if protocol == "osc-all"
+                                else 3
+                            )
+                            tag = {
+                                "osc-one": ",[fff]",
+                                "osc-three": ",fff",
+                                "osc-channels": ",f",
+                                "osc-all": ",[fff][fff]",
+                            }[protocol]
+                            packets = []
+                            for index in range(6 // width):
+                                p = bytearray()
+                                for text in [f"/bench/{index}", tag]:
+                                    p.extend(text.encode())
+                                    p.extend(bytes((-len(p) - 1) % 4 + 1))
+                                p.extend(struct.pack(">f", 1))
+                                p.extend(struct.pack(">f", 0.5) * (width - 1))
+                                packets.append(p)
+                        else:
+                            packets = {
+                                "udp-drgb": [bytes([2, 1, 0, 0, 1, 7, 7, 7])],
+                                "udp-warls": [bytes([1, 1, 0, 0, 0, 1])],
+                                "udp-drgbw": [bytes([3, 1, 0, 0, 1, 0, 7, 7, 7, 0])],
+                                "udp-dnrgb": [
+                                    bytes([4, 1, 0, 0, 0, 0, 1]) + bytes([7]) * 1464,
+                                    bytes([4, 1, 1, 233, 0, 0, 1]),
+                                ],
+                                "udp-raw": [bytes([0, 0, 1, 7, 7, 7])],
+                                "udp-adaptive": [bytes([1, 1, 0, 0, 0, 1])],
+                            }[protocol]
+                        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
+                            for p in reversed(packets):
+                                sender.sendto(p, ("127.0.0.1", ready["port"]))
+                        out, error = receiver.communicate("stop 1\n", timeout=5)
+                        self.assertEqual(receiver.returncode, 0, error)
+                        result = json.loads(out)
+                        self.assertEqual(result["packets"], len(packets))
+                        self.assertEqual(result["complete_frames"], 1)
+                        self.assertEqual(result["invalid_packets"], 0)
+                        self.assertEqual(result["incomplete_frames"], 0)
+                    finally:
+                        if receiver.poll() is None:
+                            receiver.kill()
+                            receiver.communicate()
+
     def test_e131_mixed_cid_never_completes(self):
         for backend in ["portable", "batched"]:
             with (

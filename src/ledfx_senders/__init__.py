@@ -2,6 +2,11 @@
 
 __version__ = "0.1.0"
 
-from ledfx_senders.packet_senders import DDPSender, OPCSender
+from ledfx_senders.packet_senders import (
+    DDPSender,
+    OPCSender,
+    OSCSender,
+    UDPRealtimeSender,
+)
 
-__all__ = ["DDPSender", "OPCSender"]
+__all__ = ["DDPSender", "OPCSender", "OSCSender", "UDPRealtimeSender"]

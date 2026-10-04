@@ -46,3 +46,27 @@ controls over real loopback with both receive backends and all three protocols.
 E131 pins the CID of the first fully validated data or control packet. Data,
 synchronization, discovery and termination from another CID are invalid, even
 when the UDP peer and payload identity match. Malformed data cannot pin a CID.
+
+OSC modes `osc-one`, `osc-three`, `osc-channels`, `osc-all` use a fixture of
+network-order float32 channel values. The literal expected path is `/bench/N`;
+exact string padding, type tags, array brackets and remaining values are checked.
+Each packet's first float is an independent integer identity in `[1, 2**24]`.
+A float64 source channel `identity * 255` produces this value through OSC's
+truncation/normalization; no equivalent float32-source capacity is claimed.
+The harness must stop before identity rollover. Three-address packets contain
+only that single float, so their identity workload changes every channel.
+Per-RGB OSC packet identity changes at least one third of channels; sparse/static
+capacity claims cannot be inferred from this dense identified workload.
+
+Realtime modes `udp-drgb`, `udp-warls`, `udp-drgbw`, `udp-dnrgb`, `udp-raw` and
+`udp-adaptive` use raw RGB fixtures. The identifier argument is the expected
+one-byte timeout. Each full chunk reserves its first RGB pixel for a 24-bit
+nonzero identity; WARLS requires that pixel in every identified update. White
+bytes, delta indices/order, timeout, fallback sizing and chunk offsets are
+validated independently. Static keepalives lack distinct wire identities and
+must be measured using bounded drain-separated receipts, separately from
+identified delivery rates. Suppressed calls are never complete receiver frames.
+
+E1.31 termination universe and exact configured discovery page/universe contents
+are checked before maintenance acceptance or CID pinning. Malformed controls
+cannot establish the source identity.

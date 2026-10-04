@@ -1,11 +1,26 @@
 //! Independent benchmark wire oracle. It imports no production packet encoder.
-use std::time::{Duration, Instant};
+use std::{
+    borrow::Cow,
+    time::{Duration, Instant},
+};
+#[path = "stateful.rs"]
+mod stateful;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Protocol {
     Ddp,
     E131,
     Opc,
+    OscOne,
+    OscThree,
+    OscChannels,
+    OscAll,
+    Drgb,
+    Warls,
+    Drgbw,
+    Dnrgb,
+    Raw,
+    Adaptive,
 }
 impl Protocol {
     pub fn parse(s: &str) -> Result<Self, &'static str> {
@@ -13,14 +28,62 @@ impl Protocol {
             "ddp" => Ok(Self::Ddp),
             "e131" => Ok(Self::E131),
             "opc" => Ok(Self::Opc),
+            "osc-one" => Ok(Self::OscOne),
+            "osc-three" => Ok(Self::OscThree),
+            "osc-channels" => Ok(Self::OscChannels),
+            "osc-all" => Ok(Self::OscAll),
+            "udp-drgb" => Ok(Self::Drgb),
+            "udp-warls" => Ok(Self::Warls),
+            "udp-drgbw" => Ok(Self::Drgbw),
+            "udp-dnrgb" => Ok(Self::Dnrgb),
+            "udp-raw" => Ok(Self::Raw),
+            "udp-adaptive" => Ok(Self::Adaptive),
             _ => Err("unsupported protocol"),
+        }
+    }
+    fn osc(self) -> bool {
+        matches!(
+            self,
+            Self::OscOne | Self::OscThree | Self::OscChannels | Self::OscAll
+        )
+    }
+    fn realtime(self) -> bool {
+        matches!(
+            self,
+            Self::Drgb | Self::Warls | Self::Drgbw | Self::Dnrgb | Self::Raw | Self::Adaptive
+        )
+    }
+    fn realtime_kind(self, count: usize) -> u8 {
+        match self {
+            Self::Drgb if count <= 1470 => 2,
+            Self::Warls if count <= 765 => 1,
+            Self::Drgbw if count <= 1101 => 3,
+            Self::Raw if count <= 1500 => 0,
+            Self::Dnrgb => 4,
+            Self::Adaptive if count <= 765 => 2,
+            _ => {
+                if count <= 1470 {
+                    2
+                } else {
+                    4
+                }
+            }
         }
     }
     pub fn chunk_size(self, count: usize) -> usize {
         match self {
             Self::Ddp => 1440,
             Self::E131 => 510,
-            Self::Opc => count,
+            Self::Opc | Self::OscAll => count,
+            Self::OscOne | Self::OscThree => 12,
+            Self::OscChannels => 4,
+            _ => {
+                if self.realtime_kind(count) == 4 {
+                    1467
+                } else {
+                    count
+                }
+            }
         }
     }
 }
@@ -67,7 +130,7 @@ impl Frame {
     }
 }
 struct Data<'a> {
-    payload: &'a [u8],
+    payload: Cow<'a, [u8]>,
     index: usize,
     sequence: Option<u8>,
 }
@@ -86,6 +149,7 @@ pub struct Oracle {
     frames: Vec<Frame>,
     highest: u64,
     source_cid: Option<[u8; 16]>,
+    osc_tags: Vec<u8>,
     pub max_identity: u64,
     pub counts: Counts,
 }
@@ -104,13 +168,23 @@ impl Oracle {
         if protocol == Protocol::Opc && count > 65503 {
             return Err("OPC exceeds UDP ceiling");
         }
+        if protocol.osc() && !count.is_multiple_of(12)
+            || protocol.realtime() && (!count.is_multiple_of(3) || count > 65536 * 3)
+        {
+            return Err("invalid stateful fixture RGB length");
+        }
+        let osc_tags = stateful::tags(protocol, count);
         let chunk_size = protocol.chunk_size(count);
         let chunks = count.div_ceil(chunk_size);
         let smallest = (count - (chunks - 1) * chunk_size).min(8);
         if smallest < 3 {
             return Err("benchmark requires at least three identity bytes in every chunk");
         }
-        let max_identity = if smallest == 8 {
+        let max_identity = if protocol.osc() {
+            1 << 24
+        } else if protocol.realtime() {
+            (1 << 24) - 1
+        } else if smallest == 8 {
             u64::MAX
         } else {
             (1u64 << (smallest * 8)) - 1
@@ -124,12 +198,20 @@ impl Oracle {
             frames: (0..window).map(|_| Frame::new(chunks, now)).collect(),
             highest: 0,
             source_cid: None,
+            osc_tags,
             max_identity,
             counts: Counts::default(),
         })
     }
     fn parse<'a>(&self, p: &'a [u8]) -> Result<Packet<'a>, ()> {
         let count = self.expected.len();
+        if self.protocol.osc() {
+            return stateful::osc(self.protocol, p, count, &self.osc_tags).map(Packet::Data);
+        }
+        if self.protocol.realtime() {
+            return stateful::realtime(self.protocol, p, &self.expected, self.identifier)
+                .map(Packet::Data);
+        }
         match self.protocol {
             Protocol::Ddp => {
                 if p.len() < 10 || p[2] != 11 || p[3] != self.identifier {
@@ -148,7 +230,7 @@ impl Oracle {
                     return Err(());
                 }
                 Ok(Packet::Data(Data {
-                    payload: &p[10..],
+                    payload: Cow::Borrowed(&p[10..]),
                     index: start / 1440,
                     sequence: Some(p[1]),
                 }))
@@ -162,7 +244,7 @@ impl Oracle {
                     return Err(());
                 }
                 Ok(Packet::Data(Data {
-                    payload: &p[4..],
+                    payload: Cow::Borrowed(&p[4..]),
                     index: 0,
                     sequence: None,
                 }))
@@ -202,6 +284,19 @@ impl Oracle {
                     {
                         return Err(());
                     }
+                    let start = p[118] as usize * 512;
+                    let expected_end = (start + 512).min(self.chunks);
+                    if p[119] as usize != (self.chunks - 1) / 512
+                        || start >= self.chunks
+                        || p.len() != 120 + 2 * (expected_end - start)
+                    {
+                        return Err(());
+                    }
+                    for (i, u) in p[120..].chunks_exact(2).enumerate() {
+                        if u16::from_be_bytes(u.try_into().unwrap()) as usize != start + i + 1 {
+                            return Err(());
+                        }
+                    }
                     return Ok(Packet::Maintenance);
                 }
                 if (root, vector) != (4, 2)
@@ -210,6 +305,10 @@ impl Oracle {
                     || p[115..126] != [0x72, 0x0b, 2, 0xa1, 0, 0, 0, 1, 2, 1, 0]
                     || u16::from_be_bytes(p[109..111].try_into().unwrap()) != 63999
                 {
+                    return Err(());
+                }
+                let universe = u16::from_be_bytes(p[113..115].try_into().unwrap()) as usize;
+                if universe == 0 || universe > self.chunks {
                     return Err(());
                 }
                 if p[112] == 0x40 {
@@ -228,11 +327,12 @@ impl Oracle {
                     return Err(());
                 }
                 Ok(Packet::Data(Data {
-                    payload: &p[126..126 + used],
+                    payload: Cow::Borrowed(&p[126..126 + used]),
                     index,
                     sequence: Some(p[111]),
                 }))
             }
+            _ => unreachable!(),
         }
     }
     // A benchmark receiver observes one E131 source. Pin only after all wire,
@@ -276,10 +376,25 @@ impl Oracle {
                 return;
             }
         };
-        let marker = data.payload.len().min(8);
-        let id = data.payload[..marker]
-            .iter()
-            .fold(0u64, |n, &v| (n << 8) | v as u64);
+        let marker = if self.protocol.osc() {
+            4
+        } else if self.protocol.realtime() {
+            3
+        } else {
+            data.payload.len().min(8)
+        };
+        let id = if self.protocol.osc() {
+            let value = f32::from_be_bytes(data.payload[..4].try_into().unwrap());
+            if !value.is_finite() || !(1.0..=16777216.0).contains(&value) || value.fract() != 0.0 {
+                self.counts.invalid += 1;
+                return;
+            }
+            value as u64
+        } else {
+            data.payload[..marker]
+                .iter()
+                .fold(0u64, |n, &v| (n << 8) | v as u64)
+        };
         let start = data.index * self.chunk_size;
         if id == 0
             || id > self.max_identity
@@ -291,7 +406,7 @@ impl Oracle {
         let sequence = match self.protocol {
             Protocol::Ddp => Some((id % 15 + 1) as u8),
             Protocol::E131 => Some(((id - 1) % 256) as u8),
-            Protocol::Opc => None,
+            _ => None,
         };
         if data.sequence != sequence {
             self.counts.wrong_sequence += 1;
@@ -508,14 +623,15 @@ mod tests {
         sync[38..40].copy_from_slice(&0x700bu16.to_be_bytes());
         sync[40..44].copy_from_slice(&1u32.to_be_bytes());
         sync[45..47].copy_from_slice(&63999u16.to_be_bytes());
-        let mut discovery = vec![0; 122];
+        let mut discovery = vec![0; 124];
         discovery[..44].copy_from_slice(&sync[..44]);
-        discovery[16..18].copy_from_slice(&0x706au16.to_be_bytes());
-        discovery[38..40].copy_from_slice(&0x7054u16.to_be_bytes());
+        discovery[16..18].copy_from_slice(&0x706cu16.to_be_bytes());
+        discovery[38..40].copy_from_slice(&0x7056u16.to_be_bytes());
         discovery[40..44].copy_from_slice(&2u32.to_be_bytes());
-        discovery[112..114].copy_from_slice(&0x700au16.to_be_bytes());
+        discovery[112..114].copy_from_slice(&0x700cu16.to_be_bytes());
         discovery[114..118].copy_from_slice(&1u32.to_be_bytes());
         discovery[120..122].copy_from_slice(&1u16.to_be_bytes());
+        discovery[122..124].copy_from_slice(&2u16.to_be_bytes());
         let mut termination = first;
         termination[112] = 0x40;
         for mut control in [sync, discovery, termination] {
@@ -559,5 +675,38 @@ mod tests {
                 .max_identity,
             0xffffff
         );
+    }
+    #[test]
+    fn malformed_controls_do_not_pin_cid_or_count_maintenance() {
+        let now = Instant::now();
+        let mut o = Oracle::new(Protocol::E131, vec![7; 513], 0, 32, now).unwrap();
+        for universe in [0, 3, 64000, 65535] {
+            let mut p = e131(1, 0, 513);
+            p[112] = 0x40;
+            p[113..115].copy_from_slice(&(universe as u16).to_be_bytes());
+            p[22..38].fill(9);
+            o.feed(&p, now);
+        }
+        let mut p = vec![0; 124];
+        p[..44].copy_from_slice(&e131(1, 0, 513)[..44]);
+        p[16..18].copy_from_slice(&0x706cu16.to_be_bytes());
+        p[18..22].copy_from_slice(&8u32.to_be_bytes());
+        p[38..40].copy_from_slice(&0x7056u16.to_be_bytes());
+        p[40..44].copy_from_slice(&2u32.to_be_bytes());
+        p[112..114].copy_from_slice(&0x700cu16.to_be_bytes());
+        p[114..118].copy_from_slice(&1u32.to_be_bytes());
+        for universes in [[0u16, 2], [1, 1], [2, 1], [1, 64000], [1, 3]] {
+            for (slot, value) in p[120..].chunks_exact_mut(2).zip(universes) {
+                slot.copy_from_slice(&value.to_be_bytes())
+            }
+            o.feed(&p, now);
+        }
+        assert_eq!(o.counts.invalid, 9);
+        assert_eq!(o.counts.maintenance, 0);
+        assert_eq!(o.source_cid, None);
+        let mut valid = e131(1, 0, 513);
+        valid[22..38].fill(1);
+        o.feed(&valid, now);
+        assert_eq!(o.source_cid, Some([1; 16]));
     }
 }

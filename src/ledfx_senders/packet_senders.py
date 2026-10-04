@@ -165,3 +165,257 @@ class OPCSender(_PacketSender):
         self, pixel_count: int, *, destination: str, port: int = 7890, channel: int = 0
     ) -> None:
         self._initialize(pixel_count, destination, port, channel)
+
+
+class _StatefulSender:
+    _protocol: ClassVar[str]
+
+    def send(self, frame: Frame, now: float) -> None:
+        from ledfx_senders.original import original
+
+        normalized, kind = original(frame, self.channel_count)
+        self._engine.send(normalized, kind, now)
+
+    def close(self) -> None:
+        self._engine.close()
+
+    @property
+    def closed(self) -> bool:
+        return self._engine.closed
+
+    def _initialize_stateful(
+        self,
+        *,
+        destination: str,
+        port: int,
+        pixel_count: int,
+        mode_name: str,
+        paths: list[bytes],
+        timeout: int,
+        minimise: bool,
+        interval: float,
+        mode: str,
+        backend: str,
+        batch_size: int,
+        override_destination: str | None,
+    ) -> None:
+        _integer(
+            pixel_count,
+            "pixel_count",
+            1,
+            1_000_000 if self._protocol == "osc" else 65536,
+        )
+        _integer(port, "port", 1, 65535)
+        _integer(timeout, "timeout", 1, 255)
+        self.channel_count = pixel_count * 3
+        address = socket.gethostbyname(destination)
+        self._engine = _native.StatefulEngine(
+            self._protocol,
+            pixel_count,
+            f"{address}:{port}",
+            mode_name,
+            paths,
+            timeout,
+            minimise,
+            interval,
+            mode,
+            backend,
+            batch_size,
+            override_destination,
+        )
+
+
+class OSCSender(_StatefulSender):
+    """OSC arrays/floats, signed-i64 truncation and exact original-value suppression.
+
+    All floating inputs must be finite and in [-2**63, 2**63). Equal values across
+    dtypes (including signed zero) suppress; lossy NumPy promotion does not.
+    Callers must not mutate an input while send is executing.
+    """
+
+    _protocol = "osc"
+
+    def __init__(
+        self,
+        *,
+        destination: str,
+        pixel_count: int,
+        path: str,
+        send_type: str,
+        port: int = 9000,
+        starting_addr: int = 0,
+    ) -> None:
+        self._setup(
+            destination=destination,
+            pixel_count=pixel_count,
+            path=path,
+            send_type=send_type,
+            port=port,
+            starting_addr=starting_addr,
+        )
+
+    def _setup(
+        self,
+        *,
+        destination: str,
+        pixel_count: int,
+        path: str,
+        send_type: str,
+        port: int = 9000,
+        starting_addr: int = 0,
+        mode: str = "socket",
+        backend: str = "batched",
+        batch_size: int = 64,
+        override_destination: str | None = None,
+    ) -> None:
+        _integer(pixel_count, "pixel_count", 1, 1_000_000)
+        if type(starting_addr) is not int or starting_addr < 0:
+            raise ValueError("starting_addr must be a nonnegative integer")
+        count = (
+            pixel_count * 3
+            if send_type == "Three_Addresses"
+            else 1
+            if send_type == "All_To_One"
+            else pixel_count
+        )
+        paths = [
+            path.format(address=starting_addr + i).encode("utf-8") for i in range(count)
+        ]
+        self._initialize_stateful(
+            destination=destination,
+            port=port,
+            pixel_count=pixel_count,
+            mode_name=send_type,
+            paths=paths,
+            timeout=1,
+            minimise=True,
+            interval=0,
+            mode=mode,
+            backend=backend,
+            batch_size=batch_size,
+            override_destination=override_destination,
+        )
+
+    @classmethod
+    def _test_sender(
+        cls,
+        *,
+        destination: str,
+        pixel_count: int,
+        path: str,
+        send_type: str,
+        port: int = 9000,
+        starting_addr: int = 0,
+        mode: str,
+        backend: str = "batched",
+        batch_size: int = 64,
+        override_destination: str | None = None,
+    ) -> Self:
+        sender = cls.__new__(cls)
+        sender._setup(
+            destination=destination,
+            pixel_count=pixel_count,
+            path=path,
+            send_type=send_type,
+            port=port,
+            starting_addr=starting_addr,
+            mode=mode,
+            backend=backend,
+            batch_size=batch_size,
+            override_destination=override_destination,
+        )
+        return sender
+
+
+class UDPRealtimeSender(_StatefulSender):
+    """WLED realtime with exact original deltas and whole-frame refresh.
+
+    now uses a monotonic clock. Floating encoding follows the deterministic DDP
+    wrap policy, independently of original-value comparisons. No input aliases
+    survive send; callers must not mutate input during send.
+    """
+
+    _protocol = "realtime"
+
+    def __init__(
+        self,
+        *,
+        destination: str,
+        pixel_count: int,
+        packet_type: str,
+        timeout: int,
+        minimise_traffic: bool,
+        port: int = 21324,
+        keepalive_interval: float | None = None,
+    ) -> None:
+        self._setup(
+            destination=destination,
+            pixel_count=pixel_count,
+            packet_type=packet_type,
+            timeout=timeout,
+            minimise_traffic=minimise_traffic,
+            port=port,
+            keepalive_interval=keepalive_interval,
+        )
+
+    def _setup(
+        self,
+        *,
+        destination: str,
+        pixel_count: int,
+        packet_type: str,
+        timeout: int,
+        minimise_traffic: bool,
+        port: int = 21324,
+        keepalive_interval: float | None = None,
+        mode: str = "socket",
+        backend: str = "batched",
+        batch_size: int = 64,
+        override_destination: str | None = None,
+    ) -> None:
+        self._initialize_stateful(
+            destination=destination,
+            port=port,
+            pixel_count=pixel_count,
+            mode_name=packet_type,
+            paths=[],
+            timeout=timeout,
+            minimise=minimise_traffic,
+            interval=timeout / 2 if keepalive_interval is None else keepalive_interval,
+            mode=mode,
+            backend=backend,
+            batch_size=batch_size,
+            override_destination=override_destination,
+        )
+
+    @classmethod
+    def _test_sender(
+        cls,
+        *,
+        destination: str,
+        pixel_count: int,
+        packet_type: str,
+        timeout: int,
+        minimise_traffic: bool,
+        port: int = 21324,
+        keepalive_interval: float | None = None,
+        mode: str,
+        backend: str = "batched",
+        batch_size: int = 64,
+        override_destination: str | None = None,
+    ) -> Self:
+        sender = cls.__new__(cls)
+        sender._setup(
+            destination=destination,
+            pixel_count=pixel_count,
+            packet_type=packet_type,
+            timeout=timeout,
+            minimise_traffic=minimise_traffic,
+            port=port,
+            keepalive_interval=keepalive_interval,
+            mode=mode,
+            backend=backend,
+            batch_size=batch_size,
+            override_destination=override_destination,
+        )
+        return sender

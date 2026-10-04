@@ -36,4 +36,14 @@ for cls, count in ((DDPSender, 3), (OPCSender, 1)):
     assert sender._engine.captures()[0][0].endswith(bytes([1, 2, 3]))
     sender.close()
 """
+    script += """
+from ledfx_senders import OSCSender, UDPRealtimeSender
+osc = OSCSender._test_sender(destination='127.0.0.1',pixel_count=1,path='/x',send_type='Three_Arguments',mode='capture')
+rt = UDPRealtimeSender._test_sender(destination='127.0.0.1',pixel_count=1,packet_type='DRGB',timeout=1,minimise_traffic=True,mode='capture')
+for sender in (osc,rt):
+    sender.send(bytes([1,2,3]),now=0)
+    sender.send(bytes([1,2,3]),now=0.1)
+    assert len(sender._engine.captures())==1
+    sender.close()
+"""
     subprocess.run([sys.executable, "-I", "-c", script], check=True, timeout=15)

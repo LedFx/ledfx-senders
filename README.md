@@ -139,3 +139,52 @@ Intel/ARM64 and Windows x86-64. It neither publishes nor releases anything.
 Its shared-runner measurements are conversion-only and exclude the owning
 snapshot, packet packing and Python boundary; they are not network throughput.
 See `native/bench/receiver/README.md` for independent delivered-frame measurement.
+
+## Stateful OSC and UDP realtime
+
+`OSCSender` supports `One_Argument`, `Three_Arguments`, `Three_Addresses` and
+`All_To_One`, with Python `path.format(address=...)` expansion at construction
+and `starting_addr`. Call `send(frame, now=time.monotonic())` and `close()`.
+`UDPRealtimeSender` supports DRGB, WARLS, DRGBW, DNRGB, adaptive and raw RGB modes;
+its `keepalive_interval` accepts the application's configured refresh threshold.
+The default interval is half the timeout. Eligibility uses strict elapsed-time
+comparison and all chunks of a DNRGB refresh are sent together.
+
+Both senders own their snapshots and UDP sockets. Callers must not mutate input
+during `send`. Input is an RGB ndarray of the configured shape or contiguous
+unsigned byte buffer. There are no retained caller aliases or channel objects.
+Unsuccessful submissions retain the previous successful suppression state;
+accepted datagram counters still include the prefix accepted by the socket.
+Every frame shares the existing 200 ms socket-work budget. Close sends no
+protocol termination traffic and releases the socket synchronously.
+
+Original values determine equality and WARLS deltas before quantization.
+Equal numeric values across dtypes, including positive and negative zero,
+compare equal. Extended floating precision is retained. Comparison is exact,
+so `uint64(2**64-1)` differs from `float64(2**64)` even though NumPy's mixed
+comparison may round the integer. This deliberately corrects lossy historical
+suppression. First valid frames are always sent.
+
+OSC uses a portable signed 64-bit domain: finite floating originals in
+`[-2**63, 2**63)`, and integers within signed 64-bit bounds. It truncates toward
+zero, converts the integer to float64, divides by 255, then writes big-endian
+float32. It does not clip to RGB byte bounds. Nonfinite/out-of-domain values
+raise `ValueError` before persistent wire buffers, counters or datagrams change.
+This explicitly replaces platform-dependent historical NumPy integer casts.
+Realtime encoding follows the documented deterministic DDP conversion contract;
+that encoding does not change original-value comparisons.
+
+OSC validates every formatted path and UDP's 65507-byte payload ceiling during
+construction. Realtime limits remain DRGB490, WARLS255, DRGBW367 and raw500;
+unsupported configured sizes fall back to DRGB or DNRGB. DNRGB admits at most
+65536 pixels, with 489 pixels per chunk, and adaptive ties choose DRGB.
+
+On x86_64, measured f64 OSC conversion uses runtime-guarded AVX512F/DQ/BW/VL,
+then AVX2, with portable compiler code on older CPUs. Original f64 delta masks
+use measured AVX2 or compiler code; the mask preserves three-channel pixel
+boundaries and signed-zero equality. Realtime reuses the existing DDP SIMD
+policies. No global host CPU build flags are used. Explicit NEON OSC conversion
+is a test-only candidate pending native measurements; AArch64 production uses
+the compiler route. Other dtypes and mixed/extended precision have exact
+portable implementations. Hosted SIMD jobs test and measure candidates without
+silently enabling an unmeasured architecture path.

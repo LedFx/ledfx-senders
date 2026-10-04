@@ -1,8 +1,13 @@
 //! Native packet engine for the independent ledfx-senders distribution.
 pub mod buffer;
+mod change_mask;
 mod convert;
 pub mod ddp;
 pub mod opc;
+mod original;
+mod osc;
+mod osc_numeric;
+mod realtime;
 pub mod sender;
 mod test_gate;
 pub mod transport;
@@ -31,6 +36,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<buffer::PacketBanks>()?;
     module.add_class::<Engine>()?;
     module.add_class::<ddp::PacketEngine>()?;
+    module.add_class::<realtime::StatefulEngine>()?;
     module.add_class::<test_gate::TestLockGate>()?;
     module.add_function(wrap_pyfunction!(engine_info, module)?)?;
     Ok(())
