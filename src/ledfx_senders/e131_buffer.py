@@ -77,11 +77,9 @@ def normalize_frame(frame: Frame, channel_count: int) -> Frame:
     dtype = frame.dtype
     if dtype.kind not in "buif":
         raise ValueError("unsupported channel dtype")
-    if dtype.isnative and dtype in (
-        np.dtype("uint8"),
-        np.dtype("float32"),
-        np.dtype("float64"),
-    ):
+    # Dtype equality is not buffer-format identity: on some platforms
+    # longdouble equals float64 but exports PEP 3118 'g', not native f64 'd'.
+    if dtype.isnative and dtype.char in ("B", "f", "d"):
         return (
             frame
             if frame.flags.c_contiguous and frame.flags.aligned

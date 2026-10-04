@@ -75,3 +75,17 @@ environment and PyPI trusted publishing for `publish.yml`. Publishing also needs
 an explicit tag dispatch with a successful CI run from that exact commit. No
 initial PyPI release exists or is assumed. [Source provenance](PROVENANCE.md)
 records the original repository and benchmark evidence.
+
+macOS wheel deployment targets account for both Rust and Python: Intel starts at
+10.12 for CPython 3.11, 10.13 for 3.12–3.13, and 10.15 for 3.14+; ARM64 starts at
+11.0. These are build targets, not claims that every optional application or
+NumPy version runs on every older OS. Cibuildwheel repair and installed tests
+must pass before a platform is considered validated.
+
+The private `_TestLockGate` and `Engine._test_hold_lock` diagnostics let tests
+hold the real engine mutex with a five-second native deadline. Python controls
+a separate release signal; send/service/close still use their normal lock
+acquisition paths. This verifies GIL cooperation under mutex contention, not a
+throughput claim or a scheduler-dependent number of heartbeat ticks. Production
+frame processing never consults the gate. The helper drops its guard before
+reattaching to Python, including on timeout.

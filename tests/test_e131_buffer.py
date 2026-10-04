@@ -162,3 +162,41 @@ def test_unaligned_numpy_buffer(dtype: DTypeLike) -> None:
     banks = PacketBanks(ChannelLayout(3))
     banks.update(frame)
     assert banks.snapshot()[0][126:129] == bytes([1, 255, 0])
+
+
+@pytest.mark.parametrize("value", [np.nan, np.inf, -1, 256])
+def test_longdouble_late_invalid_preserves_both_banks(value: float) -> None:
+    banks = PacketBanks(ChannelLayout(513), fill=93)
+    frame = np.full(513, 12, dtype=np.longdouble)
+    banks.update(frame)
+    committed, staging = banks.snapshot(), banks.native.snapshot(True)
+    frame[-1] = value
+    with pytest.raises(ValueError):
+        banks.update(frame)
+    assert banks.snapshot() == committed
+    assert banks.native.snapshot(True) == staging
+
+
+def test_longdouble_buffer_identity_even_when_dtype_compares_as_float64(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ledfx_senders.e131_buffer import normalize_frame
+
+    # Emulate the dtype-comparison alias present on macOS ARM/Windows even
+    # when this host's longdouble is wider. Its actual buffer still exports g.
+    frame = np.array([-0.9, 1.9, 255.9], dtype=np.longdouble)
+    original_dtype = np.dtype
+    extended = frame.dtype
+    assert extended.char == "g" and memoryview(frame).format == "g"
+
+    def comparable_dtype(name: str) -> np.dtype[np.generic]:
+        return extended if name == "float64" else original_dtype(name)
+
+    with monkeypatch.context() as context:
+        context.setattr(np, "dtype", comparable_dtype)
+        normalized = normalize_frame(frame, 3)
+    assert memoryview(normalized).format == "B"
+    assert bytes(normalized) == bytes([0, 1, 255])
+    banks = PacketBanks(ChannelLayout(3))
+    banks.update(normalized)
+    assert banks.snapshot()[0][126:129] == bytes([0, 1, 255])
