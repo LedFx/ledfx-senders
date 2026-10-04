@@ -7,7 +7,7 @@ from numpy.typing import DTypeLike
 from ledfx_senders.e131_buffer import ChannelLayout, Frame, PacketBanks
 
 
-def test_owned_atomic_conversion():
+def test_owned_atomic_conversion() -> None:
     banks = PacketBanks(ChannelLayout(3))
     banks.update(np.array([-0.9, 255.9, 1.9]))
     assert banks.snapshot()[0][126:129] == bytes([0, 255, 1])
@@ -23,7 +23,7 @@ def test_owned_atomic_conversion():
 @pytest.mark.parametrize("pixels", [1, 170, 171, 1000, 50000])
 @pytest.mark.parametrize("size", [510, 512, 1])
 @pytest.mark.parametrize("offset", [0, 1, 7, 510, 511, 513, 1027])
-def test_every_wire_slot(pixels: int, size: int, offset: int):
+def test_every_wire_slot(pixels: int, size: int, offset: int) -> None:
     count = pixels * 3
     if (offset + count - 1) // size + 1 > 63999:
         with pytest.raises(ValueError):
@@ -62,7 +62,7 @@ def test_every_wire_slot(pixels: int, size: int, offset: int):
     ],
 )
 @pytest.mark.parametrize("order", ["C", "F", "strided"])
-def test_formats(dtype: DTypeLike, order: str):
+def test_formats(dtype: DTypeLike, order: str) -> None:
     frame = np.array([[0, 1], [1, 0]], dtype=dtype, order="F" if order == "F" else "C")
     if order == "strided":
         frame = np.repeat(frame, 2, axis=1)[:, ::2]
@@ -72,7 +72,7 @@ def test_formats(dtype: DTypeLike, order: str):
 
 
 @pytest.mark.parametrize("factory", [bytes, bytearray, memoryview])
-def test_byte_buffers(factory: Callable[[bytes], Frame]):
+def test_byte_buffers(factory: Callable[[bytes], Frame]) -> None:
     banks = PacketBanks(ChannelLayout(3))
     banks.update(factory(bytes([0, 128, 255])))
     assert banks.snapshot()[0][126:129] == bytes([0, 128, 255])
@@ -93,7 +93,7 @@ def test_byte_buffers(factory: Callable[[bytes], Frame]):
         bytes(2),
     ],
 )
-def test_rejected_inputs_atomic(frame: Frame):
+def test_rejected_inputs_atomic(frame: Frame) -> None:
     banks = PacketBanks(ChannelLayout(1), fill=93)
     before = banks.snapshot()
     with pytest.raises((ValueError, TypeError)):
@@ -101,14 +101,14 @@ def test_rejected_inputs_atomic(frame: Frame):
     assert banks.snapshot() == before
 
 
-def test_released_view():
+def test_released_view() -> None:
     frame = memoryview(b"a")
     frame.release()
     with pytest.raises(ValueError):
         PacketBanks(ChannelLayout(1)).update(frame)
 
 
-def test_uncommon_precision_before_narrowing():
+def test_uncommon_precision_before_narrowing() -> None:
     banks = PacketBanks(ChannelLayout(1))
     for dtype in (np.float16, np.longdouble, ">f8"):
         for value in (-1, 256, np.inf, np.nan):
@@ -124,7 +124,7 @@ def test_uncommon_precision_before_narrowing():
         assert banks.snapshot()[0][126] == 255
 
 
-def test_storage_reuse_and_no_aliases():
+def test_storage_reuse_and_no_aliases() -> None:
     banks = PacketBanks(ChannelLayout(513), fill=93)
     frame = np.full(513, 12, dtype=np.float32)
     banks.update(frame)

@@ -14,13 +14,17 @@ import sys
 import sysconfig
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 from ledfx_senders import _native as _e131
 from ledfx_senders import e131_packet
 
 
-def arguments():
+def arguments() -> tuple[
+    list[bytes], list[tuple[int, int, int, int]], int, list[str], bytes, list[bytes]
+]:
     cid = bytes(range(16))
     return (
         [
@@ -38,11 +42,16 @@ def arguments():
         3,
         ["239.255.0.1:5568"],
         bytes(e131_packet.sync_template(cid=cid, sync_universe=63999)),
-        list(e131_packet.discovery_packets([1], cid=cid, source_name="wheel-smoke")),
+        list(e131_packet.discovery_packets((1,), cid=cid, source_name="wheel-smoke")),
     )
 
 
-def receive(receiver, size, offset=None, value=None):
+def receive(
+    receiver: socket.socket,
+    size: int,
+    offset: int | None = None,
+    value: bytes | None = None,
+) -> bytes:
     packet, address = receiver.recvfrom(2048)
     assert ipaddress.ip_address(address[0]).is_loopback, address
     assert 0 < address[1] != 5568, address  # native socket bound an ephemeral port
@@ -50,11 +59,14 @@ def receive(receiver, size, offset=None, value=None):
     assert packet[:16] == bytes.fromhex("001000004153432d45312e3137000000")
     assert int.from_bytes(packet[16:18], "big") == 0x7000 | (size - 16)
     if offset is not None:
+        assert value is not None
         assert packet[offset : offset + len(value)] == value
     return packet
 
 
-def exercise(multicast, backend):
+def exercise(
+    multicast: bool, backend: str
+) -> dict[str, bool | tuple[str, int, int, int]]:
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as receiver:
         receiver.settimeout(3)
         if multicast:
@@ -102,15 +114,18 @@ def exercise(multicast, backend):
         return {"multicast": multicast, "transport": engine.transport_info()}
 
 
-def main():
+def main() -> None:
     extension = Path(_e131.__file__).resolve()
     checkout = Path(__file__).resolve().parents[1]
     assert not extension.is_relative_to(checkout), extension
     free_threaded = bool(sysconfig.get_config_var("Py_GIL_DISABLED"))
     if os.environ.get("LEDFX_REQUIRE_FREE_THREADING") == "1":
         assert free_threaded, "Expected a free-threaded interpreter"
+    gil_enabled = cast(
+        Callable[[], bool], getattr(sys, "_is_gil_enabled", lambda: True)
+    )
     if free_threaded:
-        assert not sys._is_gil_enabled(), "Extension import re-enabled the GIL"
+        assert not gil_enabled(), "Extension import re-enabled the GIL"
     results = [
         exercise(multicast, backend)
         for backend in ("portable", "batched")
@@ -118,7 +133,7 @@ def main():
     ]
     concurrency()
     if free_threaded:
-        assert not sys._is_gil_enabled(), "GIL enabled during concurrent execution"
+        assert not gil_enabled(), "GIL enabled during concurrent execution"
     print(
         json.dumps(
             {
@@ -133,7 +148,7 @@ def main():
     )
 
 
-def concurrency():
+def concurrency() -> None:
     """Shared-engine send/service/close races, without datagram callbacks."""
     faulthandler.dump_traceback_later(30, exit=True)
     try:
@@ -141,7 +156,7 @@ def concurrency():
         failures = []
         barrier = threading.Barrier(5)
 
-        def worker(index, closing=False):
+        def worker(index: int, closing: bool = False) -> None:
             try:
                 barrier.wait()
                 for _ in range(64):
@@ -159,7 +174,7 @@ def concurrency():
             except BaseException as error:  # noqa: BLE001 - propagate every worker failure
                 failures.append(error)
 
-        def run(closing):
+        def run(closing: bool) -> None:
             threads = [
                 threading.Thread(target=worker, args=(index, closing), daemon=True)
                 for index in range(5)

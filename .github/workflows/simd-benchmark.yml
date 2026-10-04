@@ -1,0 +1,121 @@
+name: Manual SIMD validation and measurements
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/native-packet-senders]
+    paths:
+      - "native/**"
+      - "src/**"
+      - "tests/**"
+      - "ci/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "pdm_build.py"
+      - "setup.py"
+      - "setup.cfg"
+      - "rust-toolchain.toml"
+      - ".github/workflows/simd-benchmark.yml"
+permissions:
+  contents: read
+jobs:
+  measure:
+    name: Native SIMD (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel, windows-2025]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: false
+      - name: Native platform and runtime
+        shell: bash
+        run: |
+          rustup toolchain install 1.94.0 --profile minimal
+          uv python install 3.12
+          uv python find 3.12
+          rustc --version --verbose
+          if command -v lscpu >/dev/null; then lscpu; fi
+          if command -v sysctl >/dev/null; then sysctl -a 2>/dev/null | grep -E 'machdep.cpu|hw.model|hw.ncpu' || true; fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: 12d9030a181a828b0738b04134e4dc5608f6d7a8
+          path: .benchmark-control-source
+      - name: Build immutable control and candidate wheels
+        shell: bash
+        run: |
+          PYO3_PYTHON="$(uv python find 3.12)"
+          export PYO3_PYTHON
+          uv build --python 3.12 --wheel --out-dir candidate-wheels
+          uv build .benchmark-control-source --python 3.12 --wheel --out-dir "$PWD/control-wheels"
+          uv venv --python 3.12 .measure-env
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            measure_python="$PWD/.measure-env/Scripts/python.exe"
+          else
+            measure_python="$PWD/.measure-env/bin/python"
+          fi
+          uv pip install --python "$measure_python" candidate-wheels/*.whl
+          "$measure_python" -c "from pathlib import Path; from zipfile import ZipFile; [ZipFile(next(Path(label+'-wheels').glob('*.whl'))).extractall(label+'-package') for label in ('control','candidate')]"
+          echo "MEASURE_PYTHON=$measure_python" >> "$GITHUB_ENV"
+          cargo build --locked --release --manifest-path native/Cargo.toml --bin ledfx-receiver
+      - name: Optimized paths and matched scalar control
+        shell: bash
+        working-directory: native
+        run: |
+          PYO3_PYTHON="$(uv python find 3.12)"
+          export PYO3_PYTHON
+          cargo test --locked --release --lib convert::tests
+          cargo test --locked --release --lib osc_numeric::tests
+          cargo test --locked --release --lib change_mask::tests
+          cargo test --locked --release --lib original::tests
+          cargo test --locked --release --lib artnet
+          cargo test --locked --release --lib encoders
+          cargo test --locked --release --lib nanoleaf
+          "$MEASURE_PYTHON" ../ci/archive_measurement.py
+          cargo test --locked --release --lib convert::tests::benchmark_supported_kernels -- --ignored --exact --nocapture --test-threads=1 | tee simd-results.log
+          cargo test --locked --release --lib osc_numeric::tests::benchmark_osc_kernels -- --ignored --exact --nocapture --test-threads=1 | tee osc-simd-results.log
+          cargo test --locked --release --lib original::tests::benchmark_stateful_kernels -- --ignored --exact --nocapture --test-threads=1 | tee original-results.log
+          cargo test --locked --release --lib change_mask::tests::benchmark_change_masks -- --ignored --exact --nocapture --test-threads=1 | tee mask-results.log
+          cargo test --locked --release --lib artnet_numeric::tests::benchmark_artnet_transforms -- --ignored --exact --nocapture --test-threads=1 | tee artnet-simd-results.log
+          cargo test --locked --release --lib artnet::tests::benchmark_artnet_stages -- --ignored --exact --nocapture --test-threads=1 | tee artnet-stage-results.log
+          cargo test --locked --release --lib encoders::tests::benchmark_vendor_stages -- --ignored --exact --nocapture --test-threads=1 | tee vendor-stage-results.log
+          cargo test --locked --release --lib encoders::tests::benchmark_bulk_packing -- --ignored --exact --nocapture --test-threads=1 | tee vendor-packing-results.log
+          cargo test --locked --release --lib artnet::tests::benchmark_short_spans -- --ignored --exact --nocapture --test-threads=1 | tee short-span-results.log
+          cargo rustc --locked --release --lib --crate-type rlib -- --emit=asm
+      - name: Short native receiver smoke outside the development host
+        shell: bash
+        run: |
+          PYO3_PYTHON="$(uv python find 3.12)"
+          export PYO3_PYTHON
+          cargo build --locked --release --manifest-path native/Cargo.toml --bin ledfx-receiver
+          "$MEASURE_PYTHON" ci/receiver_smoke.py | tee native/receiver-results.log
+          "$MEASURE_PYTHON" ci/structural_smoke.py | tee native/structural-results.log
+          "$MEASURE_PYTHON" ci/benchmark_vendor_gather.py | tee native/vendor-gather-results.log
+          "$MEASURE_PYTHON" ci/benchmark_whole_call.py --control control-package --candidate candidate-package | tee native/whole-call-results.log
+          "$MEASURE_PYTHON" ci/archive_measurement.py --verify
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: simd-${{ matrix.runner }}
+          path: |
+            native/simd-results.log
+            native/osc-simd-results.log
+            native/original-results.log
+            native/mask-results.log
+            native/artnet-simd-results.log
+            native/artnet-stage-results.log
+            native/vendor-stage-results.log
+            native/vendor-packing-results.log
+            native/short-span-results.log
+            native/vendor-gather-results.log
+            native/target/release/deps/_native*.s
+            native/receiver-results.log
+            native/structural-results.log
+            native/whole-call-results.log
+            measurement-artifacts/

@@ -3,7 +3,9 @@
 from setuptools_rust import Binding, RustExtension
 
 
-def pdm_build_update_setup_kwargs(context, setup_kwargs):
+def pdm_build_update_setup_kwargs(
+    context: object, setup_kwargs: dict[str, object]
+) -> None:
     setup_kwargs["rust_extensions"] = [
         RustExtension(
             "ledfx_senders._native",

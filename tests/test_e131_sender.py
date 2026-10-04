@@ -2,7 +2,7 @@ from ledfx_senders.e131 import E131Sender
 from ledfx_senders.e131_buffer import ChannelLayout
 
 
-def test_capture_sequence_and_close():
+def test_capture_sequence_and_close() -> None:
     sender = E131Sender._test_sender(
         ChannelLayout(513, universe_size=512),
         destination="127.0.0.1",
@@ -42,7 +42,7 @@ def make_sender(count: int = 3) -> E131Sender:
     )
 
 
-def test_refresh_discovery_coalescing_and_owned_snapshot():
+def test_refresh_discovery_coalescing_and_owned_snapshot() -> None:
     sender = make_sender()
     frame = bytearray([1, 2, 3])
     sender.send(frame)
@@ -61,7 +61,7 @@ def test_refresh_discovery_coalescing_and_owned_snapshot():
     assert [len(p) for p, _ in added[1:]] == [638, 638, 638, 49]
 
 
-def test_discovery_pagination():
+def test_discovery_pagination() -> None:
     sender = make_sender(513)
     sender.send(bytes(513))
     start = len(sender._engine.captures())
@@ -72,7 +72,7 @@ def test_discovery_pagination():
     assert all(d == "239.255.250.214:5568" for _, d in captures)
 
 
-def test_close_blackout_and_termination_and_unused():
+def test_close_blackout_and_termination_and_unused() -> None:
     sender = make_sender()
     sender.close()
     assert sender._engine.captures() == []
@@ -92,7 +92,7 @@ def test_close_blackout_and_termination_and_unused():
 
 
 @pytest.mark.parametrize("backend", ["portable", "batched"])
-def test_real_loopback_all_packets_use_same_state_machine(backend: str):
+def test_real_loopback_all_packets_use_same_state_machine(backend: str) -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as receiver:
         receiver.bind(("127.0.0.1", 0))
         receiver.settimeout(2)
@@ -129,7 +129,7 @@ def test_real_loopback_all_packets_use_same_state_machine(backend: str):
         assert all(receiver.recv(2048)[112] == 64 for _ in range(9))
 
 
-def test_concurrent_direct_native_send_service_close():
+def test_concurrent_direct_native_send_service_close() -> None:
     sender = E131Sender._test_sender(
         ChannelLayout(50000),
         destination="127.0.0.1",
@@ -142,7 +142,7 @@ def test_concurrent_direct_native_send_service_close():
     started = threading.Event()
     barrier = threading.Barrier(2)
 
-    def send():
+    def send() -> None:
         barrier.wait()
         for i in range(100):
             try:
@@ -152,12 +152,12 @@ def test_concurrent_direct_native_send_service_close():
             except RuntimeError:
                 pass
 
-    def service():
+    def service() -> None:
         barrier.wait()
         for i in range(100):
             sender._engine.service(i * 0.01)
 
-    def close():
+    def close() -> None:
         assert started.wait(5)
         sender.close()
 
@@ -171,7 +171,7 @@ def test_concurrent_direct_native_send_service_close():
     assert sender.closed
 
 
-def test_invalid_frame_leaves_counters_and_banks_unchanged():
+def test_invalid_frame_leaves_counters_and_banks_unchanged() -> None:
     import numpy as np
 
     sender = make_sender()
@@ -184,7 +184,7 @@ def test_invalid_frame_leaves_counters_and_banks_unchanged():
     assert sender._engine.committed_copy() == committed
 
 
-def test_real_multicast_production_sender():
+def test_real_multicast_production_sender() -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as receiver:
         receiver.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         receiver.bind(("", 5568))
@@ -226,7 +226,7 @@ def test_internal_factory_rejects_invalid_backend_configuration(
     backend: str,
     batch_size: int,
     override_destination: str | None,
-):
+) -> None:
     with pytest.raises(ValueError):
         E131Sender._test_sender(
             ChannelLayout(3),
@@ -239,7 +239,7 @@ def test_internal_factory_rejects_invalid_backend_configuration(
         )
 
 
-def test_discovery_exact_ten_second_boundary():
+def test_discovery_exact_ten_second_boundary() -> None:
     sender = make_sender()
     sender.send(bytes(3))
     sender.service(0)
@@ -260,7 +260,7 @@ def test_buffer_protocol_reentrancy_under_subprocess_watchdog(
     target: str,
     callback: str,
     wrapped: bool,
-):
+) -> None:
     import subprocess
     import textwrap
 
@@ -333,7 +333,7 @@ def test_buffer_protocol_reentrancy_under_subprocess_watchdog(
 def test_buffer_release_reentrancy_on_native_errors(
     target: str,
     failure: str,
-):
+) -> None:
     import subprocess
     import textwrap
 
@@ -382,7 +382,7 @@ def test_buffer_release_reentrancy_on_native_errors(
     assert result.returncode == 0, result.stderr
 
 
-def test_service_before_first_complete_frame_is_idle():
+def test_service_before_first_complete_frame_is_idle() -> None:
     sender = make_sender()
     sender.service(0)
     sender.service(100)

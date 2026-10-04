@@ -1,5 +1,17 @@
 //! Native packet engine for the independent ledfx-senders distribution.
+pub mod artnet;
+mod artnet_numeric;
 pub mod buffer;
+mod change_mask;
+mod convert;
+pub mod ddp;
+mod encoders;
+mod nanoleaf;
+pub mod opc;
+mod original;
+mod osc;
+mod osc_numeric;
+mod realtime;
 pub mod sender;
 mod test_gate;
 pub mod transport;
@@ -27,8 +39,17 @@ fn engine_info(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<buffer::PacketBanks>()?;
     module.add_class::<Engine>()?;
+    module.add_class::<ddp::PacketEngine>()?;
+    module.add_class::<artnet::ArtNetEngine>()?;
+    module.add_class::<realtime::StatefulEngine>()?;
     module.add_class::<test_gate::TestLockGate>()?;
+    module.add_class::<nanoleaf::NanoleafEngine>()?;
+    module.add_class::<encoders::RGBGather>()?;
     module.add_function(wrap_pyfunction!(engine_info, module)?)?;
+    module.add_function(wrap_pyfunction!(encoders::encode_adalight, module)?)?;
+    module.add_function(wrap_pyfunction!(encoders::encode_openrgb, module)?)?;
+    module.add_function(wrap_pyfunction!(encoders::encode_hue, module)?)?;
+    module.add_function(wrap_pyfunction!(encoders::encode_govee, module)?)?;
     Ok(())
 }
 

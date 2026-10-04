@@ -18,7 +18,7 @@ def data() -> bytearray:
     )
 
 
-def test_data_reference_and_literal_fields():
+def test_data_reference_and_literal_fields() -> None:
     packet = data()
     assert isinstance(packet, bytearray)
     assert len(packet) == 638
@@ -37,7 +37,7 @@ def test_data_reference_and_literal_fields():
     assert packet == (FIXTURES / "termination.bin").read_bytes()
 
 
-def test_sync_reference():
+def test_sync_reference() -> None:
     packet = codec.sync_template(cid=CID, sync_universe=63999)
     assert isinstance(packet, bytearray)
     assert len(packet) == 49
@@ -46,7 +46,7 @@ def test_sync_reference():
     assert packet == (FIXTURES / "sync.bin").read_bytes()
 
 
-def test_discovery_reference_and_pagination():
+def test_discovery_reference_and_pagination() -> None:
     packets = codec.discovery_packets((63999, 17, 17), cid=CID, source_name=SOURCE)
     assert packets == ((FIXTURES / "discovery.bin").read_bytes(),)
     packets = codec.discovery_packets(tuple(range(1, 514)), cid=CID, source_name=SOURCE)
@@ -75,7 +75,7 @@ def test_invalid_source(name: str) -> None:
         codec.discovery_packets((), cid=CID, source_name=name)
 
 
-def test_utf8_boundary():
+def test_utf8_boundary() -> None:
     p = codec.data_template(
         1, cid=CID, source_name="é" * 31 + "a", priority=0, sync_universe=0
     )
@@ -128,7 +128,7 @@ def test_invalid_data_sync(sync: object) -> None:
         )
 
 
-def test_constants_and_bounds():
+def test_constants_and_bounds() -> None:
     assert (codec.DEFAULT_PORT, codec.DATA_PACKET_SIZE, codec.PAYLOAD_OFFSET) == (
         5568,
         638,

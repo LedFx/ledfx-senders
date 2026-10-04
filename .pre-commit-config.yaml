@@ -29,7 +29,7 @@ repos:
         files: ^.github/workflows/
         pass_filenames: false
       - id: pyrefly-check
-        name: strict source, stub and test types
+        name: strict types for all maintained Python and stubs
         entry: uv run --frozen --only-group dev --python 3.12 python ci/check_types.py
         language: system
         types_or: [python, pyi]
