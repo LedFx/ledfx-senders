@@ -496,3 +496,159 @@ def test_connected_connect_is_a_noop_even_when_engine_is_busy(
         sender.close()
     assert not thread.is_alive() and not gate.timed_out
     assert not failures, failures
+
+
+def _socket_handles() -> set[str] | None:
+    directory = Path("/proc/self/fd")
+    if not directory.is_dir():
+        return None
+    handles: set[str] = set()
+    for entry in directory.iterdir():
+        try:
+            target = str(entry.readlink())
+        except FileNotFoundError:
+            continue
+        if target.startswith("socket:["):
+            handles.add(target)
+    return handles
+
+
+@pytest.mark.parametrize("operation", ["send", "close"])
+def test_expired_idle_operation_disposes_client_and_socket(
+    oracle: StrictOracle, operation: str
+) -> None:
+    from ledfx_senders.hue import HueSender
+
+    before = _socket_handles()
+    sender = HueSender(
+        destination="127.0.0.1",
+        port=oracle.port,
+        psk_identity=IDENTITY,
+        client_key=KEY,
+        entertainment_id=UUID,
+        channel_ids=(7,),
+        send_timeout=1e-9,
+        close_timeout=1e-9,
+    )
+    sender.connect()
+    connected = _socket_handles()
+    owned = None if before is None or connected is None else connected - before
+    if owned is not None:
+        assert len(owned) == 1
+    try:
+        with pytest.raises(TimeoutError):
+            if operation == "send":
+                sender.send(bytes(3))
+            else:
+                sender.close()
+        assert not sender.connected
+        remaining = _socket_handles()
+        if owned is not None and remaining is not None:
+            assert owned.isdisjoint(remaining), (
+                "terminal idle operation retained UDP socket"
+            )
+        assert not sender._engine._test_has_client()
+        oracle.expect_no_plaintext(0.03)
+    finally:
+        try:
+            sender.close()
+        except TimeoutError:
+            pass  # This tiny cleanup budget may expire; resources must already be gone.
+
+
+def test_snapshot_expiry_disposes_idle_client_before_return(
+    oracle: StrictOracle,
+) -> None:
+    from threading import Event
+
+    from ledfx_senders.hue import HueSender
+
+    before = _socket_handles()
+    sender = HueSender(
+        destination="127.0.0.1",
+        port=oracle.port,
+        psk_identity=IDENTITY,
+        client_key=KEY,
+        entertainment_id=UUID,
+        channel_ids=(7,),
+        send_timeout=0.01,
+    )
+    sender.connect()
+    connected = _socket_handles()
+    owned = None if before is None or connected is None else connected - before
+    gate = _native._TestLockGate()
+    failures: list[BaseException] = []
+
+    def send() -> None:
+        try:
+            sender._engine._test_send_after_snapshot(bytes(3), 0, gate)
+        except BaseException as exc:  # noqa: BLE001 - propagate worker failures
+            failures.append(exc)
+
+    thread = Thread(target=send)
+    thread.start()
+    try:
+        gate.wait_entered()
+        # The gate is after snapshot and after the absolute budget starts.
+        # Waiting longer than that budget deterministically expires it.
+        Event().wait(0.02)
+        gate.release()
+        thread.join(3)
+        assert not thread.is_alive() and not gate.timed_out
+        assert len(failures) == 1 and isinstance(failures[0], TimeoutError), failures
+        remaining = _socket_handles()
+        if owned is not None and remaining is not None:
+            assert len(owned) == 1 and owned.isdisjoint(remaining)
+        assert not sender._engine._test_has_client()
+        assert not sender.connected
+        oracle.expect_no_plaintext(0.03)
+    finally:
+        gate.release()
+        thread.join(3)
+        sender.close()
+
+
+def test_close_cancellation_after_successful_finish_disposes_owner_resources(
+    oracle: StrictOracle,
+) -> None:
+    from ledfx_senders.hue import HueSender
+
+    before = _socket_handles()
+    sender = HueSender(
+        destination="127.0.0.1",
+        port=oracle.port,
+        psk_identity=IDENTITY,
+        client_key=KEY,
+        entertainment_id=UUID,
+        channel_ids=(7,),
+        close_timeout=1e-9,
+    )
+    sender.connect()
+    connected = _socket_handles()
+    owned = None if before is None or connected is None else connected - before
+    gate = _native._TestLockGate()
+    failures: list[BaseException] = []
+
+    def hold_finished_owner() -> None:
+        try:
+            sender._engine._test_hold_after_finish(gate)
+        except BaseException as exc:  # noqa: BLE001 - propagate worker failures
+            failures.append(exc)
+
+    thread = Thread(target=hold_finished_owner)
+    thread.start()
+    try:
+        gate.wait_entered()  # Native owner passed finish successfully and still holds the mutex.
+        with pytest.raises(TimeoutError):
+            sender.close()
+        assert sender.closed and not sender.connected
+    finally:
+        gate.release()
+        thread.join(3)
+    assert not thread.is_alive() and not gate.timed_out
+    assert not failures, failures
+    remaining = _socket_handles()
+    if owned is not None and remaining is not None:
+        assert len(owned) == 1 and owned.isdisjoint(remaining)
+    assert not sender._engine._test_has_client()
+    oracle.expect_no_plaintext(0.03)

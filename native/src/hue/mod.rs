@@ -94,6 +94,24 @@ pub struct HueEngine {
     close_timeout: Duration,
 }
 
+// Created before entering an operation closure. Its Drop runs after that
+// closure's session guard has been released, including during unwinding.
+struct CleanupOnExit<'a>(&'a HueEngine);
+impl Drop for CleanupOnExit<'_> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            let _ = self
+                .0
+                .state
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| {
+                    if state == CLOSED { None } else { Some(FAILED) }
+                });
+            self.0.cancel.cancel();
+        }
+        self.0.dispose_if_cancelled();
+    }
+}
+
 impl HueEngine {
     #[allow(clippy::too_many_arguments)]
     fn build(
@@ -135,6 +153,44 @@ impl HueEngine {
             connect_timeout,
             send_timeout,
             close_timeout,
+        })
+    }
+
+    fn with_cleanup<T>(&self, operation: impl FnOnce() -> T) -> T {
+        let _cleanup = CleanupOnExit(self);
+        operation()
+    }
+
+    fn dispose_if_cancelled(&self) {
+        if !self.cancel.cancelled() {
+            return;
+        }
+        let mut client = match self.inner.try_lock() {
+            Ok(client) => client,
+            Err(TryLockError::Poisoned(error)) => error.into_inner(),
+            // This owner has its own post-unlock cleanup guard. It cannot
+            // miss cancellation even if finish already checked the flag.
+            Err(TryLockError::WouldBlock) => return,
+        };
+        client.take(); // Drop closes the socket directly; no peer/readiness I/O.
+        self.config
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+    }
+
+    fn close_at(&self, deadline: Instant) -> Result<(), HueError> {
+        self.with_cleanup(|| {
+            self.state.store(CLOSED, Ordering::Release);
+            self.cancel.cancel();
+            let mut client = self.lock(deadline, true)?;
+            self.config.lock().map_err(|_| HueError::Closed)?.take();
+            let result = match client.as_mut() {
+                Some(client) => client.close(deadline),
+                None => Ok(()),
+            };
+            client.take();
+            result
         })
     }
 
@@ -180,8 +236,7 @@ impl HueEngine {
                         if state == CLOSED { None } else { Some(FAILED) }
                     });
                 self.cancel.cancel();
-                self.config.lock().unwrap_or_else(|e| e.into_inner()).take();
-                // A concurrent active owner sees cancellation and disposes its client.
+                self.dispose_if_cancelled();
             }
         })
     }
@@ -217,19 +272,21 @@ impl HueEngine {
     }
 
     fn send_owned(&self, packet: Vec<u8>, deadline: Instant) -> Result<(), HueError> {
-        let mut client = self.session_lock(deadline)?;
-        if self.state.load(Ordering::Acquire) == NEW && !self.cancel.cancelled() {
-            return Err(HueError::Closed);
-        }
-        let result = if self.state.load(Ordering::Acquire) != CONNECTED {
-            Err(HueError::Closed)
-        } else {
-            match client.as_mut() {
-                Some(client) => client.send(&packet, deadline, &self.cancel),
-                None => Err(HueError::Closed),
+        self.with_cleanup(|| {
+            let mut client = self.session_lock(deadline)?;
+            if self.state.load(Ordering::Acquire) == NEW && !self.cancel.cancelled() {
+                return Err(HueError::Closed);
             }
-        };
-        self.finish(&mut client, result)
+            let result = if self.state.load(Ordering::Acquire) != CONNECTED {
+                Err(HueError::Closed)
+            } else {
+                match client.as_mut() {
+                    Some(client) => client.send(&packet, deadline, &self.cancel),
+                    None => Err(HueError::Closed),
+                }
+            };
+            self.finish(&mut client, result)
+        })
     }
 
     fn snapshot(&self, py: Python<'_>, frame: &Bound<'_, PyAny>, kind: u8) -> PyResult<Vec<u8>> {
@@ -284,34 +341,36 @@ impl HueEngine {
         }
         let deadline = self.deadline(self.connect_timeout).map_err(error)?;
         py.detach(|| {
-            let mut client = self.session_lock(deadline)?;
-            match self.state.load(Ordering::Acquire) {
-                CONNECTED => return self.finish(&mut client, Ok(())),
-                NEW => {}
-                _ => return self.finish(&mut client, Err(HueError::Closed)),
-            }
-            if self
-                .state
-                .compare_exchange(NEW, CONNECTING, Ordering::AcqRel, Ordering::Acquire)
-                .is_err()
-            {
-                return self.finish(&mut client, Err(HueError::Closed));
-            }
-            let config = self
-                .config
-                .lock()
-                .map_err(|_| HueError::Closed)?
-                .take()
-                .ok_or(HueError::Closed)?;
-            let result = match Client::connect(config, Arc::clone(&self.cancel), deadline) {
-                Ok(connected) => {
-                    *client = Some(connected);
-                    // Close may publish cancellation while the handshake completes.
-                    self.publish_connected()
+            self.with_cleanup(|| {
+                let mut client = self.session_lock(deadline)?;
+                match self.state.load(Ordering::Acquire) {
+                    CONNECTED => return self.finish(&mut client, Ok(())),
+                    NEW => {}
+                    _ => return self.finish(&mut client, Err(HueError::Closed)),
                 }
-                Err(error) => Err(error),
-            };
-            self.finish(&mut client, result)
+                if self
+                    .state
+                    .compare_exchange(NEW, CONNECTING, Ordering::AcqRel, Ordering::Acquire)
+                    .is_err()
+                {
+                    return self.finish(&mut client, Err(HueError::Closed));
+                }
+                let config = self
+                    .config
+                    .lock()
+                    .map_err(|_| HueError::Closed)?
+                    .take()
+                    .ok_or(HueError::Closed)?;
+                let result = match Client::connect(config, Arc::clone(&self.cancel), deadline) {
+                    Ok(connected) => {
+                        *client = Some(connected);
+                        // Close may publish cancellation while the handshake completes.
+                        self.publish_connected()
+                    }
+                    Err(error) => Err(error),
+                };
+                self.finish(&mut client, result)
+            })
         })
         .map_err(error)
     }
@@ -325,38 +384,28 @@ impl HueEngine {
 
     fn service(&self, py: Python<'_>) -> PyResult<()> {
         py.detach(|| {
-            let mut client = match self.inner.try_lock() {
-                Ok(client) => client,
-                Err(TryLockError::WouldBlock) => return Ok(()),
-                Err(TryLockError::Poisoned(_)) => return Err(HueError::Closed),
-            };
-            if self.state.load(Ordering::Acquire) == NEW {
-                return Ok(());
-            }
-            let result = match client.as_mut() {
-                Some(client) => client.service(Instant::now(), &self.cancel),
-                None => Err(HueError::Closed),
-            };
-            self.finish(&mut client, result)
+            self.with_cleanup(|| {
+                let mut client = match self.inner.try_lock() {
+                    Ok(client) => client,
+                    Err(TryLockError::WouldBlock) => return Ok(()),
+                    Err(TryLockError::Poisoned(_)) => return Err(HueError::Closed),
+                };
+                if self.state.load(Ordering::Acquire) == NEW {
+                    return Ok(());
+                }
+                let result = match client.as_mut() {
+                    Some(client) => client.service(Instant::now(), &self.cancel),
+                    None => Err(HueError::Closed),
+                };
+                self.finish(&mut client, result)
+            })
         })
         .map_err(error)
     }
 
     fn close(&self, py: Python<'_>) -> PyResult<()> {
         let deadline = self.deadline(self.close_timeout).map_err(error)?;
-        self.state.store(CLOSED, Ordering::Release);
-        py.detach(|| {
-            self.cancel.cancel();
-            let mut client = self.lock(deadline, true)?;
-            self.config.lock().map_err(|_| HueError::Closed)?.take();
-            let result = match client.as_mut() {
-                Some(client) => client.close(deadline),
-                None => Ok(()),
-            };
-            client.take();
-            result
-        })
-        .map_err(error)
+        py.detach(|| self.close_at(deadline)).map_err(error)
     }
 
     #[getter]
@@ -370,12 +419,42 @@ impl HueEngine {
 
     fn _test_hold_lock(&self, py: Python<'_>, gate: &test_gate::TestLockGate) -> PyResult<()> {
         py.detach(|| {
-            let mut client = self.inner.lock().map_err(|_| "engine lock poisoned")?;
-            let result = gate.shared.hold();
-            if self.cancel.cancelled() {
-                let _ = self.finish(&mut client, Err(HueError::Closed));
-            }
-            result
+            self.with_cleanup(|| {
+                let mut client = self.inner.lock().map_err(|_| "engine lock poisoned")?;
+                let result = gate.shared.hold();
+                if self.cancel.cancelled() {
+                    let _ = self.finish(&mut client, Err(HueError::Closed));
+                }
+                result
+            })
+        })
+        .map_err(PyRuntimeError::new_err)
+    }
+
+    fn _test_has_client(&self, py: Python<'_>) -> PyResult<bool> {
+        py.detach(|| {
+            self.with_cleanup(|| {
+                self.inner
+                    .try_lock()
+                    .map(|client| client.is_some())
+                    .map_err(|_| "engine is busy")
+            })
+        })
+        .map_err(PyRuntimeError::new_err)
+    }
+
+    fn _test_hold_after_finish(
+        &self,
+        py: Python<'_>,
+        gate: &test_gate::TestLockGate,
+    ) -> PyResult<()> {
+        py.detach(|| {
+            self.with_cleanup(|| {
+                let mut client = self.inner.lock().map_err(|_| "engine lock poisoned")?;
+                self.finish(&mut client, Ok(()))
+                    .map_err(|_| "engine is unavailable")?;
+                gate.shared.hold()
+            })
         })
         .map_err(PyRuntimeError::new_err)
     }
@@ -642,5 +721,102 @@ mod binding_tests {
         assert_eq!(engine.state.load(Ordering::Acquire), FAILED);
         assert!(engine.cancel.cancelled());
         assert!(engine.config.lock().unwrap().is_none());
+    }
+    #[test]
+    fn cancellation_after_successful_finish_is_cleaned_after_unlock() {
+        use std::{sync::mpsc, thread};
+        let engine = Arc::new(
+            HueEngine::build(
+                "127.0.0.1",
+                2100,
+                b"id",
+                &[0; 16],
+                b"12345678-1234-1234-1234-123456789abc",
+                &[7],
+                0,
+                5.0,
+                0.2,
+                0.2,
+            )
+            .unwrap(),
+        );
+        let owner = Arc::clone(&engine);
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            owner.with_cleanup(|| {
+                let mut client = owner.inner.lock().unwrap();
+                owner.finish(&mut client, Ok(())).unwrap();
+                entered_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            })
+        });
+        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        engine.state.store(CLOSED, Ordering::Release);
+        engine.cancel.cancel();
+        engine.dispose_if_cancelled(); // Busy owner has already passed finish.
+        release_tx.send(()).unwrap();
+        worker.join().unwrap();
+        assert!(engine.inner.lock().unwrap().is_none());
+        assert!(
+            engine.config.lock().unwrap().is_none(),
+            "owner failed post-unlock cleanup"
+        );
+    }
+
+    #[test]
+    fn expired_idle_close_retains_timeout_and_disposes_configuration() {
+        let engine = HueEngine::build(
+            "127.0.0.1",
+            2100,
+            b"id",
+            &[0; 16],
+            b"12345678-1234-1234-1234-123456789abc",
+            &[7],
+            0,
+            5.0,
+            0.2,
+            0.2,
+        )
+        .unwrap();
+        assert!(matches!(
+            engine.close_at(Instant::now()),
+            Err(HueError::Timeout)
+        ));
+        assert!(engine.closed());
+        assert!(engine.config.lock().unwrap().is_none());
+    }
+    #[test]
+    fn owner_unwinding_publishes_terminal_cancellation_and_disposes() {
+        let engine = HueEngine::build(
+            "127.0.0.1",
+            2100,
+            b"id",
+            &[0; 16],
+            b"12345678-1234-1234-1234-123456789abc",
+            &[7],
+            0,
+            5.0,
+            0.2,
+            0.2,
+        )
+        .unwrap();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            engine.with_cleanup(|| {
+                let _client = engine.inner.lock().unwrap();
+                panic!("diagnostic owner unwinding");
+            });
+        }));
+        assert!(result.is_err());
+        assert!(engine.cancel.cancelled());
+        assert_eq!(engine.state.load(Ordering::Acquire), FAILED);
+        assert!(engine.config.lock().unwrap().is_none());
+        assert!(
+            engine
+                .inner
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .is_none()
+        );
     }
 }
