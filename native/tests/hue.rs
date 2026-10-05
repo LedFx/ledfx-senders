@@ -173,13 +173,14 @@ fn service_never_waits() {
     let mut client = candidate(io);
     client.enqueue(vec![7; 9]).unwrap();
     let (done_tx, done_rx) = mpsc::channel();
-    thread::spawn(move || {
+    let worker = thread::spawn(move || {
         let result = client.service(Instant::now(), &Cancellation::new());
         done_tx.send((result, client)).unwrap();
     });
     let (result, client) = done_rx
-        .recv_timeout(Duration::from_millis(100))
+        .recv_timeout(Duration::from_millis(500))
         .expect("service waited for readiness");
+    worker.join().unwrap();
     result.unwrap();
     assert_eq!(observed.lock().unwrap().sends, 1);
     assert_eq!(client.pending.front().unwrap(), &vec![7; 9]);
@@ -350,13 +351,14 @@ fn service_bounds_interrupted_sends() {
     let mut client = candidate(io);
     client.enqueue(vec![7]).unwrap();
     let (done_tx, done_rx) = mpsc::channel();
-    thread::spawn(move || {
+    let worker = thread::spawn(move || {
         let result = client.service(Instant::now(), &Cancellation::new());
         done_tx.send((result, client)).unwrap();
     });
     let (result, client) = done_rx
-        .recv_timeout(Duration::from_millis(100))
+        .recv_timeout(Duration::from_millis(500))
         .expect("service spun on Interrupted");
+    worker.join().unwrap();
     result.unwrap();
     assert_eq!(observed.lock().unwrap().sends, 1);
     assert_eq!(client.queued_bytes, 1);

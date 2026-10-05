@@ -1,10 +1,14 @@
 """Strict external test oracle and private native probe driver. Dummy secrets only."""
 
+import faulthandler
 import selectors
 import socket
 import subprocess
+import sys
 import tempfile
+import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from threading import Event, Lock, Thread
 from types import TracebackType
@@ -14,12 +18,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FinalFlightDropRelay:
-    """Forward the oracle's records, dropping encrypted server handshake records.
+    """Forward the oracle's records, dropping or corrupting encrypted server handshake records.
 
     Reads only DTLS record framing; it never creates records or performs crypto.
     """
 
-    def __init__(self, oracle_port: int) -> None:
+    def __init__(self, oracle_port: int, *, corrupt: bool = False) -> None:
+        self._corrupt = corrupt
         self._downstream = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._upstream = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._downstream.bind(("127.0.0.1", 0))
@@ -28,14 +33,19 @@ class FinalFlightDropRelay:
         self._upstream.connect(("127.0.0.1", oracle_port))
         self._stop = Event()
         self._lock = Lock()
-        self._dropped = 0
+        self._affected = 0
         self._thread = Thread(target=self._forward, name="hue-test-relay")
         self._thread.start()
 
     @property
     def dropped(self) -> int:
         with self._lock:
-            return self._dropped
+            return 0 if self._corrupt else self._affected
+
+    @property
+    def corrupted(self) -> int:
+        with self._lock:
+            return self._affected if self._corrupt else 0
 
     def _filter(self, datagram: bytes) -> bytes:
         offset = 0
@@ -51,7 +61,11 @@ class FinalFlightDropRelay:
             epoch = int.from_bytes(datagram[offset + 3 : offset + 5], "big")
             if datagram[offset] == 22 and epoch > 0:
                 with self._lock:
-                    self._dropped += 1
+                    self._affected += 1
+                if self._corrupt:
+                    record = bytearray(datagram[offset:end])
+                    record[-1] ^= 1  # Damage authentication tag; retain entire record.
+                    forwarded.extend(record)
             else:
                 forwarded.extend(datagram[offset:end])
             offset = end
@@ -228,6 +242,10 @@ class StrictOracle:
         identity: bytes,
         key: bytes,
         cipher: str = "PSK-AES128-GCM-SHA256",
+        *,
+        ems: bool = True,
+        ipv6: bool = False,
+        certificate_only: bool = False,
     ) -> None:
         self._temporary = tempfile.TemporaryDirectory(prefix="hue-oracle-")
         directory = Path(self._temporary.name)
@@ -241,7 +259,11 @@ class StrictOracle:
                 cipher,
                 str(self._output),
                 str(self._metadata),
+                "ems" if ems else "non-ems",
+                "6" if ipv6 else "4",
+                "certificate" if certificate_only else "psk",
             ],
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
         )
@@ -279,6 +301,38 @@ class StrictOracle:
             time.sleep(0.01)
         raise AssertionError("oracle did not receive expected plaintext")
 
+    def command(self, command: str) -> None:
+        assert command in {"close", "silence"}
+        assert self._process.stdin is not None
+        self._process.stdin.write((command + "\n").encode("ascii"))
+        self._process.stdin.flush()
+        # Fixture acknowledges only after executing the requested operation.
+        assert self._process.stdout is not None
+        with selectors.DefaultSelector() as selector:
+            selector.register(self._process.stdout, selectors.EVENT_READ)
+            assert selector.select(timeout=2), "oracle control was not acknowledged"
+            assert (
+                self._process.stdout.readline() == ("DONE " + command + "\n").encode()
+            )
+
+    @property
+    def authenticated(self) -> bool:
+        lines = self._metadata.read_bytes().splitlines()
+        return (
+            len(lines) >= 4 and lines[1] == b"DTLSv1.2" and lines[3].startswith(b"EMS ")
+        )
+
+    @property
+    def extended_master_secret(self) -> bool:
+        return self._metadata.read_text().splitlines()[3] == "EMS 1"
+
+    @property
+    def fatal_alert(self) -> int | None:
+        for line in self._metadata.read_text().splitlines():
+            if line.startswith("FATAL "):
+                return int(line.split()[1])
+        return None
+
     @property
     def identity(self) -> bytes:
         return self._metadata.read_bytes().splitlines()[0]
@@ -305,6 +359,199 @@ class StrictOracle:
             except subprocess.TimeoutExpired:
                 self._process.kill()
                 self._process.wait(timeout=2)
+        if self._process.stdin is not None:
+            self._process.stdin.close()
         if self._process.stdout is not None:
             self._process.stdout.close()
         self._temporary.cleanup()
+
+
+def socket_handles() -> set[str] | None:
+    directory = Path("/proc/self/fd")
+    if not directory.is_dir():
+        return None
+    handles: set[str] = set()
+    for entry in directory.iterdir():
+        try:
+            target = str(entry.readlink())
+        except FileNotFoundError:
+            continue
+        if target.startswith("socket:["):
+            handles.add(target)
+    return handles
+
+
+def lifecycle_watchdog(case: str, port: int = 2100) -> None:
+    """Isolate real installed Hue operations; detect native hangs and process crashes."""
+    assert case in {"silent", "cancel", "busy", "simultaneous", "failed", "deadline"}
+    result = subprocess.run(
+        [sys.executable, "-I", str(Path(__file__).resolve()), case, str(port)],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def _lifecycle_scenario(case: str, port: int) -> None:
+    from ledfx_senders import HueSender, _native
+
+    baseline_threads = set(threading.enumerate())
+    baseline_sockets = socket_handles()
+    peer = None
+    if case in {"silent", "cancel"}:
+        peer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        peer.bind(("127.0.0.1", 0))
+        peer.settimeout(2)
+        port = peer.getsockname()[1]
+    sender = HueSender(
+        destination="127.0.0.1",
+        port=port,
+        psk_identity=b"wrong" if case == "failed" else b"hue-fixture",
+        client_key=bytes(range(16)),
+        entertainment_id="12345678-1234-1234-1234-123456789abc",
+        channel_ids=(7,),
+        connect_timeout=0.2 if case in {"silent", "failed"} else 5,
+    )
+    failures: list[BaseException] = []
+
+    def invoke(operation: Callable[[], None]) -> None:
+        try:
+            operation()
+        except BaseException as exc:  # noqa: BLE001 - propagate native worker failures
+            failures.append(exc)
+
+    if case in {"silent", "cancel"}:
+        worker = threading.Thread(target=invoke, args=(sender.connect,))
+        worker.start()
+        assert peer is not None
+        peer.recv(65535)  # Prove native handshake/socket ownership before cancellation.
+        if case == "cancel":
+            start = time.monotonic()
+            sender.close()
+            assert time.monotonic() - start < 0.5
+        worker.join(0.5)
+        assert not worker.is_alive(), "native connect did not finish"
+        assert len(failures) == 1, failures
+        assert isinstance(
+            failures[0], ConnectionError if case == "cancel" else TimeoutError
+        ), failures
+        assert not sender.connected
+        assert not sender._engine._test_has_client()
+        peer.close()
+    elif case == "failed":
+        invoke(sender.connect)
+        assert len(failures) == 1 and isinstance(
+            failures[0], (ConnectionError, TimeoutError)
+        ), failures
+        assert not sender.connected and not sender._engine._test_has_client()
+    elif case == "deadline":
+        gate = _native._TestLockGate()
+        holder = threading.Thread(
+            target=invoke, args=(lambda: sender._engine._test_hold_lock(gate),)
+        )
+        holder.start()
+        worker = threading.Thread(target=invoke, args=(lambda: sender.send(bytes(3)),))
+        try:
+            gate.wait_entered()
+            worker.start()
+            worker.join(0.5)
+            assert not worker.is_alive(), "busy lock renewed the 200 ms send budget"
+            assert len(failures) == 1 and isinstance(failures[0], TimeoutError), (
+                failures
+            )
+            assert not sender.connected
+        finally:
+            gate.release()
+            holder.join(0.5)
+            if worker.ident is not None:
+                worker.join(0.5)
+        assert not holder.is_alive() and not gate.timed_out
+        assert not sender._engine._test_has_client()
+    else:
+        if case == "simultaneous":
+            sender.connect()
+            assert sender.connected
+        gate = _native._TestLockGate()
+        holder = threading.Thread(
+            target=invoke, args=(lambda: sender._engine._test_hold_lock(gate),)
+        )
+        holder.start()
+        gate.wait_entered()
+        # Check the busy skip before cancellation can mask the try-lock contract.
+        service_probe = threading.Thread(target=invoke, args=(sender.service,))
+        service_probe.start()
+        service_probe.join(0.5)
+        assert not service_probe.is_alive(), "service waited for busy engine"
+        assert not failures, failures
+        send_gate = _native._TestLockGate()
+        worker = threading.Thread(
+            target=invoke,
+            args=(
+                lambda: sender._engine._test_send_after_snapshot(
+                    bytes(3), 0, send_gate
+                ),
+            ),
+        )
+        worker.start()
+        try:
+            send_gate.wait_entered()
+            send_gate.release()
+            # With the engine held, overlap service and close with waiting send.
+            barrier = threading.Barrier(3)
+
+            def racing(operation: Callable[[], None]) -> None:
+                barrier.wait(timeout=2)
+                invoke(operation)
+
+            service = threading.Thread(target=racing, args=(sender.service,))
+            closer = threading.Thread(target=racing, args=(sender.close,))
+            service.start()
+            closer.start()
+            start = time.monotonic()
+            barrier.wait(timeout=2)
+            service.join(0.5)
+            assert not service.is_alive(), "service waited for busy engine"
+            closer.join(0.5)
+            assert not closer.is_alive(), "close exceeded native budget"
+            assert time.monotonic() - start < 0.5
+            assert sender.closed and not sender.connected
+            worker.join(0.5)
+            assert not worker.is_alive(), "close failed to cancel waiting send"
+        finally:
+            send_gate.release()
+            gate.release()
+            holder.join(0.5)
+            worker.join(0.5)
+        assert not holder.is_alive() and not gate.timed_out and not send_gate.timed_out
+        assert failures and all(
+            isinstance(exc, (ConnectionError, TimeoutError)) for exc in failures
+        ), failures
+        assert not sender._engine._test_has_client()
+
+    sender.close()
+    sender.close()
+    assert sender.closed and not sender.connected
+    for operation in (sender.connect, lambda: sender.send(bytes(3)), sender.service):
+        try:
+            operation()
+        except ConnectionError:
+            pass
+        else:
+            raise AssertionError("terminal sender accepted reconnect/send")
+    assert set(threading.enumerate()) == baseline_threads, "worker thread leaked"
+    remaining = socket_handles()
+    if baseline_sockets is not None and remaining is not None:
+        assert remaining == baseline_sockets, "UDP socket leaked"
+    print(
+        case,
+        "closed, disconnected, workers joined; socket handles checked:",
+        baseline_sockets is not None,
+    )
+
+
+if __name__ == "__main__":
+    faulthandler.dump_traceback_later(10, exit=True)
+    _lifecycle_scenario(sys.argv[1], int(sys.argv[2]))
+    faulthandler.cancel_dump_traceback_later()

@@ -42,12 +42,14 @@ def test_probe_wrong_identity_is_rejected(oracle: StrictOracle) -> None:
     assert result.returncode == 2
     assert result.stderr.strip() in {"configuration", "dtls", "io", "timeout", "closed"}
     oracle.expect_no_plaintext(timeout=0.2)
+    assert not oracle.authenticated
 
 
 def test_probe_wrong_key_is_rejected(oracle: StrictOracle) -> None:
     result = run_probe("127.0.0.1", oracle.port, IDENTITY, b"\xff" * 16, PAYLOAD, 300)
     assert result.returncode == 2
     oracle.expect_no_plaintext(timeout=0.2)
+    assert not oracle.authenticated
 
 
 def test_probe_requires_authenticated_server_finished(oracle: StrictOracle) -> None:
@@ -170,3 +172,34 @@ def test_fault_proxy_rejects_ccm_only() -> None:
         assert relay.noise > 0
         assert result.returncode == 2
         oracle.expect_no_plaintext(timeout=0.2)
+
+
+def test_probe_rejects_corrupted_encrypted_server_finished(
+    oracle: StrictOracle,
+) -> None:
+    with FinalFlightDropRelay(oracle.port, corrupt=True) as relay:
+        result = run_probe("127.0.0.1", relay.port, IDENTITY, KEY, PAYLOAD, 300)
+        assert relay.corrupted > 0, "no encrypted server Finished was changed"
+        assert result.returncode == 2
+        oracle.expect_no_plaintext(timeout=0.2)
+
+
+@pytest.mark.parametrize("ems", [True, False], ids=["ems", "non-ems"])
+def test_requested_ems_policy_accepts_both_independent_peers(ems: bool) -> None:
+    with StrictOracle(Path(os.environ["HUE_ORACLE"]), IDENTITY, KEY, ems=ems) as peer:
+        result = run_probe("127.0.0.1", peer.port, IDENTITY, KEY, PAYLOAD, 1000)
+        assert result.returncode == 0, result.stderr
+        assert peer.receive(len(PAYLOAD), 2) == PAYLOAD
+        assert peer.extended_master_secret is ems
+        assert peer.negotiated == ("DTLSv1.2", "PSK-AES128-GCM-SHA256")
+
+
+def test_certificate_only_peer_is_rejected() -> None:
+    with StrictOracle(
+        Path(os.environ["HUE_ORACLE"]), IDENTITY, KEY, certificate_only=True
+    ) as peer:
+        result = run_probe("127.0.0.1", peer.port, IDENTITY, KEY, PAYLOAD, 300)
+        assert result.returncode == 2
+        assert not peer.authenticated
+        assert peer.fatal_alert == 40  # OpenSSL handshake_failure/no shared cipher.
+        peer.expect_no_plaintext(timeout=0.2)

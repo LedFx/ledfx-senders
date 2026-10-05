@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
-from hue_support import StrictOracle
+from hue_support import StrictOracle, lifecycle_watchdog, socket_handles
 
 from ledfx_senders import _native
 from ledfx_senders.frames import Frame
@@ -321,97 +321,32 @@ if TYPE_CHECKING:
     from ledfx_senders.hue import HueSender
 
 
-def test_service_skips_busy_engine_and_send_lock_wait_has_deadline() -> None:
-    import time
+def test_service_skips_busy_engine_and_close_cancels_waiting_send() -> None:
+    lifecycle_watchdog("busy")
 
-    sender = make_sender()
-    gate = _native._TestLockGate()
-    failures: list[BaseException] = []
 
-    def hold() -> None:
-        try:
-            sender._engine._test_hold_lock(gate)
-        except BaseException as exc:  # noqa: BLE001 - propagate worker failures
-            failures.append(exc)
-
-    thread = Thread(target=hold)
-    thread.start()
-    try:
-        gate.wait_entered()
-        start = time.monotonic()
-        sender.service()
-        assert time.monotonic() - start < 0.1
-        start = time.monotonic()
-        with pytest.raises(TimeoutError):
-            sender.send(bytes(3))
-        assert 0.15 <= time.monotonic() - start < 1
-        with pytest.raises(TimeoutError):
-            sender.close()
-        assert sender.closed
-    finally:
-        gate.release()
-        thread.join(3)
-        sender.close()
-    assert not thread.is_alive() and not gate.timed_out
-    assert not failures, failures
+def test_busy_send_lock_wait_keeps_absolute_deadline() -> None:
+    lifecycle_watchdog("deadline")
 
 
 def test_close_interrupts_silent_connect_and_prevents_reconnect() -> None:
-    import socket
-    import time
+    lifecycle_watchdog("cancel")
 
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as peer:
-        peer.bind(("127.0.0.1", 0))
-        peer.settimeout(2)
-        sender = make_sender(peer.getsockname()[1])
-        failures: list[BaseException] = []
 
-        def connect() -> None:
-            try:
-                sender.connect()
-            except BaseException as exc:  # noqa: BLE001 - propagate worker failures
-                failures.append(exc)
-
-        thread = Thread(target=connect)
-        thread.start()
-        try:
-            peer.recv(65535)
-            start = time.monotonic()
-            sender.close()
-            assert time.monotonic() - start < 1
-        finally:
-            try:
-                sender.close()
-            finally:
-                thread.join(3)
-        assert not thread.is_alive()
-        assert len(failures) == 1 and isinstance(failures[0], ConnectionError)
-        assert sender.closed and not sender.connected
-        with pytest.raises(ConnectionError):
-            sender.connect()
+def test_silent_connect_has_bounded_timeout_and_releases_resources() -> None:
+    lifecycle_watchdog("silent")
 
 
 def test_failed_connect_cannot_reconnect(oracle: StrictOracle) -> None:
-    from ledfx_senders.hue import HueSender
+    lifecycle_watchdog("failed", oracle.port)
+    oracle.expect_no_plaintext(0.03)
 
-    sender = HueSender(
-        destination="127.0.0.1",
-        port=oracle.port,
-        psk_identity=b"wrong",
-        client_key=KEY,
-        entertainment_id=UUID,
-        channel_ids=(7,),
-        connect_timeout=0.2,
-    )
-    try:
-        with pytest.raises((ConnectionError, TimeoutError, OSError)):
-            sender.connect()
-        assert not sender.connected
-        with pytest.raises(ConnectionError):
-            sender.connect()
-        oracle.expect_no_plaintext(0.03)
-    finally:
-        sender.close()
+
+def test_simultaneous_send_service_close_releases_connected_owner(
+    oracle: StrictOracle,
+) -> None:
+    lifecycle_watchdog("simultaneous", oracle.port)
+    oracle.expect_no_plaintext(0.03)
 
 
 def test_all_256_unique_channels_are_representable(oracle: StrictOracle) -> None:
@@ -498,28 +433,13 @@ def test_connected_connect_is_a_noop_even_when_engine_is_busy(
     assert not failures, failures
 
 
-def _socket_handles() -> set[str] | None:
-    directory = Path("/proc/self/fd")
-    if not directory.is_dir():
-        return None
-    handles: set[str] = set()
-    for entry in directory.iterdir():
-        try:
-            target = str(entry.readlink())
-        except FileNotFoundError:
-            continue
-        if target.startswith("socket:["):
-            handles.add(target)
-    return handles
-
-
 @pytest.mark.parametrize("operation", ["send", "close"])
 def test_expired_idle_operation_disposes_client_and_socket(
     oracle: StrictOracle, operation: str
 ) -> None:
     from ledfx_senders.hue import HueSender
 
-    before = _socket_handles()
+    before = socket_handles()
     sender = HueSender(
         destination="127.0.0.1",
         port=oracle.port,
@@ -531,7 +451,7 @@ def test_expired_idle_operation_disposes_client_and_socket(
         close_timeout=1e-9,
     )
     sender.connect()
-    connected = _socket_handles()
+    connected = socket_handles()
     owned = None if before is None or connected is None else connected - before
     if owned is not None:
         assert len(owned) == 1
@@ -542,7 +462,7 @@ def test_expired_idle_operation_disposes_client_and_socket(
             else:
                 sender.close()
         assert not sender.connected
-        remaining = _socket_handles()
+        remaining = socket_handles()
         if owned is not None and remaining is not None:
             assert owned.isdisjoint(remaining), (
                 "terminal idle operation retained UDP socket"
@@ -563,7 +483,7 @@ def test_snapshot_expiry_disposes_idle_client_before_return(
 
     from ledfx_senders.hue import HueSender
 
-    before = _socket_handles()
+    before = socket_handles()
     sender = HueSender(
         destination="127.0.0.1",
         port=oracle.port,
@@ -574,7 +494,7 @@ def test_snapshot_expiry_disposes_idle_client_before_return(
         send_timeout=0.01,
     )
     sender.connect()
-    connected = _socket_handles()
+    connected = socket_handles()
     owned = None if before is None or connected is None else connected - before
     gate = _native._TestLockGate()
     failures: list[BaseException] = []
@@ -596,7 +516,7 @@ def test_snapshot_expiry_disposes_idle_client_before_return(
         thread.join(3)
         assert not thread.is_alive() and not gate.timed_out
         assert len(failures) == 1 and isinstance(failures[0], TimeoutError), failures
-        remaining = _socket_handles()
+        remaining = socket_handles()
         if owned is not None and remaining is not None:
             assert len(owned) == 1 and owned.isdisjoint(remaining)
         assert not sender._engine._test_has_client()
@@ -613,7 +533,7 @@ def test_close_cancellation_after_successful_finish_disposes_owner_resources(
 ) -> None:
     from ledfx_senders.hue import HueSender
 
-    before = _socket_handles()
+    before = socket_handles()
     sender = HueSender(
         destination="127.0.0.1",
         port=oracle.port,
@@ -624,7 +544,7 @@ def test_close_cancellation_after_successful_finish_disposes_owner_resources(
         close_timeout=1e-9,
     )
     sender.connect()
-    connected = _socket_handles()
+    connected = socket_handles()
     owned = None if before is None or connected is None else connected - before
     gate = _native._TestLockGate()
     failures: list[BaseException] = []
@@ -647,8 +567,91 @@ def test_close_cancellation_after_successful_finish_disposes_owner_resources(
         thread.join(3)
     assert not thread.is_alive() and not gate.timed_out
     assert not failures, failures
-    remaining = _socket_handles()
+    remaining = socket_handles()
     if owned is not None and remaining is not None:
         assert len(owned) == 1 and owned.isdisjoint(remaining)
     assert not sender._engine._test_has_client()
     oracle.expect_no_plaintext(0.03)
+
+
+@pytest.mark.parametrize("sequence", [0, 255])
+def test_ipv6_authenticated_literal_frames(sequence: int) -> None:
+    import socket
+
+    from ledfx_senders.hue import HueSender
+
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as capability:
+            capability.bind(("::1", 0))
+    except OSError as exc:
+        pytest.skip(f"IPv6 loopback unavailable: {exc}")
+    with StrictOracle(Path(os.environ["HUE_ORACLE"]), IDENTITY, KEY, ipv6=True) as peer:
+        sender = HueSender(
+            destination="::1",
+            port=peer.port,
+            psk_identity=IDENTITY,
+            client_key=KEY,
+            entertainment_id=UUID,
+            channel_ids=(7,),
+            sequence=sequence,
+        )
+        expected = (
+            b"HueStream\2\0"
+            + bytes([sequence])
+            + bytes(4)
+            + UUID.encode()
+            + b"\7\1\1\2\2\3\3"
+        )
+        try:
+            sender.connect()
+            sender.send(b"\1\2\3")
+            sender.send(b"\1\2\3")
+            assert peer.receive(len(expected) * 2, 2) == expected * 2
+            assert peer.negotiated == ("DTLSv1.2", "PSK-AES128-GCM-SHA256")
+        finally:
+            sender.close()
+
+
+def test_idle_peer_close_notify_service_disposes_and_send_fails() -> None:
+    import time
+
+    with StrictOracle(Path(os.environ["HUE_ORACLE"]), IDENTITY, KEY) as peer:
+        sender = make_sender(peer.port)
+        sender.connect()
+        peer.command("close")
+        deadline = time.monotonic() + 1
+        try:
+            while sender.connected:
+                try:
+                    sender.service()
+                except ConnectionError:
+                    break
+                assert time.monotonic() < deadline, "idle peer alert was not detected"
+                time.sleep(0.005)
+            assert not sender.connected
+            assert not sender._engine._test_has_client()
+            with pytest.raises(ConnectionError):
+                sender.send(bytes(3))
+            with pytest.raises(ConnectionError):
+                sender.connect()
+            peer.expect_no_plaintext(0.03)
+        finally:
+            sender.close()
+
+
+def test_authenticated_silence_does_not_imply_udp_peer_death(
+    oracle: StrictOracle,
+) -> None:
+    oracle_sender = make_sender(oracle.port)
+    oracle_sender.connect()
+    try:
+        oracle.command("silence")
+        assert oracle.authenticated
+        for _ in range(3):
+            oracle_sender.service()
+            assert oracle_sender.connected
+        oracle_sender.send(bytes(3))
+        assert oracle_sender.connected
+        oracle.expect_no_plaintext(0.03)
+    finally:
+        oracle_sender.close()
