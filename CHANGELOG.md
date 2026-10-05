@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/LedFx/ledfx-senders/compare/v0.2.0...v0.3.0) (2026-10-05)
+
+
+### Features
+
+* expose consistent shared frame and protocol sender APIs ([#8](https://github.com/LedFx/ledfx-senders/issues/8)) ([ea958d3](https://github.com/LedFx/ledfx-senders/commit/ea958d3b4de5b3e378a5fc67ac3ff380c1af2a31))
+
 ## [0.2.0](https://github.com/LedFx/ledfx-senders/compare/v0.1.0...v0.2.0) (2026-10-04)
 
 
