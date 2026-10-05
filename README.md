@@ -106,7 +106,7 @@ All five platform builds, 35 installed-wheel variants and source/native checks
 must pass before publishing the same run's `sender-dist` artifact to PyPI.
 One queued publication job calls the SHA-pinned
 [shared release transaction](https://github.com/LedFx/release-ci), using the exact
-35-wheel/sdist policy in `.github/release-policy.json`. It validates archive
+generated native wheel plan and existing `pyproject.toml` metadata. It validates archive
 metadata, tag/source identity and matching remote hashes before upload, verifies
 GitHub provenance against this repository's `ci.yml`, then finalizes the existing
 draft by immutable ID last. Publication never rebuilds packages. PR, branch and
@@ -394,3 +394,8 @@ facades/extension, source archives and SHA-256 manifests before measurement and
 verify them afterward. Public-facade whole-call pairs compare an immutable
 12d9030 control with this candidate, including tiny/cutover/ordinary layout
 controls; these are distinct from sustained application transport measurements.
+
+Wheel support is maintained in `[tool.cibuildwheel]`; platform rows live in
+`[[tool.release-ci.targets]]` in `pyproject.toml`. Update the single `wheel-build`
+cibuildwheel dependency pin and `uv.lock` together. Planning and builds use that
+locked tool and configuration; publication rejects missing platform coverage.

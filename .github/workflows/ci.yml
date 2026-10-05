@@ -25,6 +25,8 @@ jobs:
     outputs:
       release: ${{ steps.plan.outputs.release }}
       version: ${{ steps.plan.outputs.version }}
+      matrix: ${{ steps.wheels.outputs.matrix }}
+      wheel-plan: ${{ steps.wheels.outputs.wheel-plan }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -34,6 +36,8 @@ jobs:
           enable-cache: false
       - id: plan
         run: uv run --no-project --python 3.12 python ci/release_guard.py
+      - id: wheels
+        uses: LedFx/release-ci/actions/plan@c4a56af516e431cbdb18519889fd0ffa7166f217 # v0.3.0
 
   lint:
     name: Lint and workflow security
@@ -84,23 +88,12 @@ jobs:
 
   native-wheels:
     name: Sender library wheels (${{ matrix.target }})
-    needs: [lint]
+    needs: [plan, lint]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-latest
-            target: linux-x86_64
-          - runner: ubuntu-24.04-arm
-            target: linux-aarch64
-          - runner: windows-latest
-            target: windows-amd64
-          - runner: macos-15-intel
-            target: macos-x86_64
-          - runner: macos-latest
-            target: macos-arm64
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     defaults:
       run:
         shell: bash
@@ -117,7 +110,13 @@ jobs:
       # Linux builds and auditwheel repair occur inside pinned manylinux images.
       # Windows/macOS repair runs with cibuildwheel's platform tools.
       - name: Build portable sender library wheels
-        run: uvx --from cibuildwheel==4.2.1 cibuildwheel --output-dir wheelhouse
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          ARCH: ${{ matrix.arch }}
+        run: >-
+          uv run --frozen --only-group wheel-build python -m cibuildwheel .
+          --config-file pyproject.toml --platform "$PLATFORM" --archs "$ARCH"
+          --output-dir wheelhouse
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sender-wheel-${{ matrix.target }}
@@ -283,7 +282,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-          sparse-checkout: .github
+          sparse-checkout: |
+            .github
+            pyproject.toml
+          sparse-checkout-cone-mode: false
           path: release-tools
       - name: Mint scoped publication token
         id: release-token
@@ -299,12 +301,13 @@ jobs:
         id: prepare
         env:
           GH_TOKEN: ${{ steps.release-token.outputs.token }}
-        uses: LedFx/release-ci/actions/release@5e683ef142d08c81e46164062cff23aa1091d3f1 # v0.2.0
+        uses: LedFx/release-ci/actions/release@c4a56af516e431cbdb18519889fd0ffa7166f217 # v0.3.0
         with:
           phase: prepare
-          policy: release-tools/.github/release-policy.json
+          project: release-tools
           dist: dist
           snapshot: ${{ runner.temp }}/sender-release-snapshot.json
+          wheel-plan: ${{ needs.plan.outputs.wheel-plan }}
       - name: Attest the tested distributions
         id: provenance
         if: steps.prepare.outputs.already_published != 'true'
@@ -317,12 +320,13 @@ jobs:
         id: upload
         env:
           GH_TOKEN: ${{ steps.release-token.outputs.token }}
-        uses: LedFx/release-ci/actions/release@5e683ef142d08c81e46164062cff23aa1091d3f1 # v0.2.0
+        uses: LedFx/release-ci/actions/release@c4a56af516e431cbdb18519889fd0ffa7166f217 # v0.3.0
         with:
           phase: check-upload
-          policy: release-tools/.github/release-policy.json
+          project: release-tools
           dist: dist
           snapshot: ${{ runner.temp }}/sender-release-snapshot.json
+          wheel-plan: ${{ needs.plan.outputs.wheel-plan }}
       - name: Publish matching missing Python distributions
         if: steps.upload.outputs.pypi_upload == 'true'
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
@@ -331,12 +335,13 @@ jobs:
       - name: Verify provenance and finalize existing GitHub draft
         env:
           GH_TOKEN: ${{ steps.release-token.outputs.token }}
-        uses: LedFx/release-ci/actions/release@5e683ef142d08c81e46164062cff23aa1091d3f1 # v0.2.0
+        uses: LedFx/release-ci/actions/release@c4a56af516e431cbdb18519889fd0ffa7166f217 # v0.3.0
         with:
           phase: finalize
-          policy: release-tools/.github/release-policy.json
+          project: release-tools
           dist: dist
           snapshot: ${{ runner.temp }}/sender-release-snapshot.json
+          wheel-plan: ${{ needs.plan.outputs.wheel-plan }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always() && steps.prepare.outcome == 'success'
         with:
