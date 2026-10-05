@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 fn unhex(input: &str) -> Result<Vec<u8>, HueError> {
     if input.len() % 2 != 0 {
-        return Err(HueError::Configuration);
+        return Err(HueError::Configuration("invalid probe argument"));
     }
     input
         .as_bytes()
@@ -22,10 +22,10 @@ fn unhex(input: &str) -> Result<Vec<u8>, HueError> {
         .map(|pair| {
             let high = (pair[0] as char)
                 .to_digit(16)
-                .ok_or(HueError::Configuration)?;
+                .ok_or(HueError::Configuration("invalid probe argument"))?;
             let low = (pair[1] as char)
                 .to_digit(16)
-                .ok_or(HueError::Configuration)?;
+                .ok_or(HueError::Configuration("invalid probe argument"))?;
             Ok((high * 16 + low) as u8)
         })
         .collect()
@@ -34,14 +34,22 @@ fn unhex(input: &str) -> Result<Vec<u8>, HueError> {
 fn run() -> Result<(), HueError> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.len() != 6 {
-        return Err(HueError::Configuration);
+        return Err(HueError::Configuration("invalid probe argument"));
     }
-    let ip: IpAddr = args[0].parse().map_err(|_| HueError::Configuration)?;
-    let port = args[1].parse().map_err(|_| HueError::Configuration)?;
+    let ip: IpAddr = args[0]
+        .parse()
+        .map_err(|_| HueError::Configuration("invalid probe argument"))?;
+    let port = args[1]
+        .parse()
+        .map_err(|_| HueError::Configuration("invalid probe argument"))?;
     let identity = unhex(&args[2])?;
     let key = unhex(&args[3])?;
     let payload = unhex(&args[4])?;
-    let budget = Duration::from_millis(args[5].parse().map_err(|_| HueError::Configuration)?);
+    let budget = Duration::from_millis(
+        args[5]
+            .parse()
+            .map_err(|_| HueError::Configuration("invalid probe argument"))?,
+    );
     let config = HueConfig::new(
         SocketAddr::new(ip, port),
         identity,
@@ -53,7 +61,7 @@ fn run() -> Result<(), HueError> {
     let cancel = Arc::new(Cancellation::new());
     let deadline = Instant::now()
         .checked_add(budget)
-        .ok_or(HueError::Configuration)?;
+        .ok_or(HueError::Configuration("invalid probe argument"))?;
     let mut client = Client::connect(config, cancel.clone(), deadline)?;
     client.send(&payload, deadline, &cancel)
 }

@@ -6,7 +6,12 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from hue_support import FinalFlightDropRelay, StrictOracle, run_probe
+from hue_support import (
+    DatagramFaultRelay,
+    FinalFlightDropRelay,
+    StrictOracle,
+    run_probe,
+)
 
 IDENTITY = b"hue-fixture"
 KEY = bytes(range(16))
@@ -102,3 +107,66 @@ def test_oracle_enforces_identity(
         client.wait(timeout=2)
         if client.stdin is not None:
             client.stdin.close()
+
+
+@pytest.mark.parametrize("fault", ["drop", "reorder", "noise", "all"])
+def test_probe_recovers_datagram_faults(oracle: StrictOracle, fault: str) -> None:
+    with DatagramFaultRelay(oracle.port, fault) as relay:
+        result = run_probe("127.0.0.1", relay.port, IDENTITY, KEY, PAYLOAD, 2500)
+        assert result.returncode == 0, result.stderr
+        assert oracle.receive(len(PAYLOAD), 2) == PAYLOAD
+        assert oracle.identity == IDENTITY
+        assert oracle.negotiated == ("DTLSv1.2", "PSK-AES128-GCM-SHA256")
+        if fault in {"drop", "all"}:
+            assert relay.dropped == 1
+        if fault in {"reorder", "all"}:
+            assert relay.reordered == 2
+        if fault in {"noise", "all"}:
+            assert relay.noise > 0
+
+
+@pytest.mark.parametrize("bad_credential", ["identity", "key"])
+def test_fault_proxy_rejects_bad_credentials(
+    oracle: StrictOracle, bad_credential: str
+) -> None:
+    with DatagramFaultRelay(oracle.port, "all") as relay:
+        result = run_probe(
+            "127.0.0.1",
+            relay.port,
+            b"wrong" if bad_credential == "identity" else IDENTITY,
+            b"\xff" * 16 if bad_credential == "key" else KEY,
+            PAYLOAD,
+            2500,
+        )
+        assert relay.dropped == 1
+        assert relay.noise > 0
+        assert result.returncode == 2
+        oracle.expect_no_plaintext(timeout=0.2)
+
+
+def test_fault_proxy_still_requires_server_finished(oracle: StrictOracle) -> None:
+    with (
+        FinalFlightDropRelay(oracle.port) as final_flight,
+        DatagramFaultRelay(final_flight.port, "all") as relay,
+    ):
+        result = run_probe("127.0.0.1", relay.port, IDENTITY, KEY, PAYLOAD, 2500)
+        assert relay.dropped == 1
+        assert relay.reordered == 2
+        assert relay.noise > 0
+        assert final_flight.dropped > 0
+        assert result.returncode == 2
+        oracle.expect_no_plaintext(timeout=0.2)
+
+
+def test_fault_proxy_rejects_ccm_only() -> None:
+    with (
+        StrictOracle(
+            Path(os.environ["HUE_ORACLE"]), IDENTITY, KEY, "PSK-AES128-CCM"
+        ) as oracle,
+        DatagramFaultRelay(oracle.port, "all") as relay,
+    ):
+        result = run_probe("127.0.0.1", relay.port, IDENTITY, KEY, PAYLOAD, 2500)
+        assert relay.dropped == 1
+        assert relay.noise > 0
+        assert result.returncode == 2
+        oracle.expect_no_plaintext(timeout=0.2)

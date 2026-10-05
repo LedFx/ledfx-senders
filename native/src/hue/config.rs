@@ -1,15 +1,14 @@
 use rtc_crypto::SecretVec;
-use std::fmt;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
+use std::{fmt, io};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HueError {
-    Configuration,
-    Dtls,
-    Io,
+    Configuration(&'static str),
+    Protocol(&'static str),
+    Io(io::Error),
     Timeout,
     Closed,
 }
@@ -17,12 +16,18 @@ pub enum HueError {
 impl fmt::Display for HueError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::Configuration => "configuration",
-            Self::Dtls => "dtls",
-            Self::Io => "io",
+            Self::Configuration(_) => "configuration",
+            Self::Protocol(_) => "dtls",
+            Self::Io(_) => "io",
             Self::Timeout => "timeout",
             Self::Closed => "closed",
         })
+    }
+}
+
+impl fmt::Debug for HueError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, formatter)
     }
 }
 
@@ -55,7 +60,7 @@ impl HueConfig {
             || send.is_zero()
             || close.is_zero()
         {
-            return Err(HueError::Configuration);
+            return Err(HueError::Configuration("invalid configuration"));
         }
         Ok(Self {
             peer,
@@ -84,9 +89,9 @@ impl Cancellation {
     }
 
     pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
         // Synchronize notification with wait's predicate to prevent lost wakeups.
         let _guard = self.mutex.lock().unwrap_or_else(|error| error.into_inner());
-        self.cancelled.store(true, Ordering::Release);
         self.wake.notify_all();
     }
 

@@ -91,6 +91,101 @@ class FinalFlightDropRelay:
         assert not self._thread.is_alive(), "test relay failed to stop"
 
 
+class DatagramFaultRelay:
+    """Test-only UDP proxy; always forwards each retained datagram unchanged.
+
+    Hold the first retained client datagram until the next datagram arrives,
+    then forward the pair in reverse. For a silent handshake this exercises
+    retransmission and replay handling without splitting coalesced records.
+    Unrelated noise uses a separate source port, exercising connected UDP filtering.
+    """
+
+    def __init__(self, oracle_port: int, fault: str) -> None:
+        assert fault in {"drop", "reorder", "noise", "all"}
+        self._fault = fault
+        self._downstream = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._upstream = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._stranger = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._downstream.bind(("127.0.0.1", 0))
+        self.port = self._downstream.getsockname()[1]
+        self._upstream.bind(("127.0.0.1", 0))
+        self._upstream.connect(("127.0.0.1", oracle_port))
+        self._stop = Event()
+        self._lock = Lock()
+        self._dropped = 0
+        self._reordered = 0
+        self._noise = 0
+        self._thread = Thread(target=self._forward, name="hue-datagram-fault-relay")
+        self._thread.start()
+
+    @property
+    def dropped(self) -> int:
+        with self._lock:
+            return self._dropped
+
+    @property
+    def reordered(self) -> int:
+        with self._lock:
+            return self._reordered
+
+    @property
+    def noise(self) -> int:
+        with self._lock:
+            return self._noise
+
+    def _forward(self) -> None:
+        peer: tuple[str, int] | None = None
+        held: bytes | None = None
+        with selectors.DefaultSelector() as selector:
+            selector.register(self._downstream, selectors.EVENT_READ)
+            selector.register(self._upstream, selectors.EVENT_READ)
+            while not self._stop.is_set():
+                for key, _ in selector.select(timeout=0.005):
+                    if key.fileobj is self._downstream:
+                        datagram, peer = self._downstream.recvfrom(65535)
+                        if self._fault in {"drop", "all"} and self.dropped == 0:
+                            with self._lock:
+                                self._dropped += 1
+                            continue
+                        if held is not None:
+                            self._upstream.send(datagram)
+                            self._upstream.send(held)
+                            held = None
+                            with self._lock:
+                                self._reordered += 2
+                        elif self._fault in {"reorder", "all"} and self.reordered == 0:
+                            held = datagram
+                        else:
+                            self._upstream.send(datagram)
+                    else:
+                        datagram = self._upstream.recv(65535)
+                        if peer is not None:
+                            self._downstream.sendto(datagram, peer)
+                if peer is not None and self._fault in {"noise", "all"}:
+                    self._stranger.sendto(b"unrelated-peer noise", peer)
+                    with self._lock:
+                        self._noise += 1
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.close()
+
+    def close(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=2)
+        self._downstream.close()
+        self._upstream.close()
+        self._stranger.close()
+        assert not self._thread.is_alive(), "test fault relay failed to stop"
+
+
 def run_probe(
     destination: str,
     port: int,

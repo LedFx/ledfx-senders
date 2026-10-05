@@ -25,7 +25,7 @@ impl Session {
             .with_psk(Some(Arc::new(move |_| Ok(key.as_ref().to_vec()))))
             .with_psk_identity_hint(Some(config.identity.clone()))
             .build(true, Some(config.peer))
-            .map_err(|_| HueError::Configuration)?;
+            .map_err(|_| HueError::Configuration("invalid DTLS configuration"))?;
         Ok(Self {
             endpoint: Endpoint::new(local, TransportProtocol::UDP, None),
             handshake: Arc::new(handshake),
@@ -37,14 +37,16 @@ impl Session {
     pub fn start(&mut self, now: Instant) -> Result<(), HueError> {
         self.endpoint
             .connect(now, self.peer, self.handshake.clone(), None)
-            .map_err(|_| HueError::Dtls)
+            .map_err(|_| HueError::Protocol("DTLS operation failed"))
     }
 
     pub fn read(&mut self, now: Instant, bytes: Vec<u8>) -> Result<(), HueError> {
         let events = self
             .endpoint
             .read(now, self.peer, None, BytesMut::from(bytes.as_slice()))
-            .map_err(|_| HueError::Dtls)?;
+            .map_err(|_| HueError::Protocol("DTLS operation failed"))?;
+        // Hue has no receive API: drop established application data after the
+        // adapter's bounded drain. Only the authenticated engine event connects.
         for event in events {
             if matches!(event, EndpointEvent::HandshakeComplete) {
                 self.connected = true;
@@ -59,7 +61,7 @@ impl Session {
         }
         self.endpoint
             .write(now, self.peer, bytes)
-            .map_err(|_| HueError::Dtls)
+            .map_err(|_| HueError::Protocol("DTLS operation failed"))
     }
 
     pub fn connected(&self) -> bool {
@@ -73,7 +75,7 @@ impl Session {
     pub fn timeout(&mut self, now: Instant) -> Result<(), HueError> {
         self.endpoint
             .handle_timeout(self.peer, now)
-            .map_err(|_| HueError::Dtls)
+            .map_err(|_| HueError::Protocol("DTLS operation failed"))
     }
 
     pub fn poll_transmit(&mut self) -> Option<Vec<u8>> {
@@ -84,6 +86,8 @@ impl Session {
 
     pub fn close(&mut self, now: Instant) -> Result<(), HueError> {
         self.connected = false;
-        self.endpoint.close(now).map_err(|_| HueError::Dtls)
+        self.endpoint
+            .close(now)
+            .map_err(|_| HueError::Protocol("DTLS operation failed"))
     }
 }
