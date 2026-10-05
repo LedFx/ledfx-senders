@@ -46,6 +46,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<test_gate::TestLockGate>()?;
     module.add_class::<nanoleaf::NanoleafEngine>()?;
     module.add_class::<encoders::RGBGather>()?;
+    module.add_class::<hue::HueEngine>()?;
     module.add_function(wrap_pyfunction!(engine_info, module)?)?;
     module.add_function(wrap_pyfunction!(encoders::encode_adalight, module)?)?;
     module.add_function(wrap_pyfunction!(encoders::encode_openrgb, module)?)?;
