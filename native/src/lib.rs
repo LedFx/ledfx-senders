@@ -6,6 +6,7 @@ mod change_mask;
 mod convert;
 pub mod ddp;
 mod encoders;
+mod hue;
 mod nanoleaf;
 pub mod opc;
 mod original;
