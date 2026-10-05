@@ -217,7 +217,7 @@ int main(int argc, char **argv) {
     } else {
         struct sockaddr_in *address = (struct sockaddr_in *)&local;
         address->sin_family = AF_INET;
-        address->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (inet_pton(AF_INET, "127.0.0.1", &address->sin_addr) != 1) return 2;
         address_len = (socklen_t)sizeof(*address);
     }
     if (bind(fd, (struct sockaddr *)&local, address_len)) return 2;
