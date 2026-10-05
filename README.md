@@ -308,13 +308,67 @@ padding. It always closes after partial/failed cleanup; diagnostics are retained
 Repeated close is harmless and subsequent sends fail. Waiting for an in-flight
 send plus cleanup can therefore exceed 200ms. `close(False)` omits blackout.
 
+## Hue Entertainment sender
+
+`HueSender` owns a synchronous DTLS 1.2 PSK session using only
+`TLS_PSK_WITH_AES_128_GCM_SHA256`. All constructor arguments are keyword-only:
+
+```python
+from ledfx_senders import HueSender
+
+sender = HueSender(
+    destination="192.0.2.1",  # numeric IPv4 or IPv6; no DNS lookup
+    psk_identity=b"application-identity",  # supply actual provisioned identity
+    client_key=bytes.fromhex("00112233445566778899aabbccddeeff"),
+    entertainment_id="12345678-1234-1234-1234-123456789abc",
+    channel_ids=(7, 12),  # immutable unique u8 channel IDs, in frame order
+)
+try:
+    sender.connect()
+    sender.send(bytes([255, 0, 0, 0, 128, 255]))
+    sender.service()
+finally:
+    sender.close()
+```
+
+The example credentials are dummy values. The caller provisions credentials,
+activates/deactivates Entertainment through the HTTPS control plane, and maps
+channels. Keep credentials out of logs and reports. Pass identity/key as binary
+`bytes`; decode a hexadecimal client key before construction. The sender owns
+native copies of the credentials, socket and session. Construction validates
+metadata without opening a socket. Frame snapshots are owned; do not mutate
+an input during its snapshot. Inputs and numeric rules match `encode_hue` below.
+
+`connect()`, `send(frame)`, `service()` and `close()` return `None`.
+`connected` and `closed` are read-only state properties. Defaults are UDP port
+2100, constant sequence 0, connect timeout 5.0 seconds, send timeout 0.2 seconds,
+and close timeout 0.2 seconds. A configured u8 sequence remains constant for
+every frame. Timeouts must be finite and positive. Native deadlines include
+lock waiting, native input snapshots and handshake retransmissions. Python
+facade validation/normalization occurs before the native send budget; arbitrary
+Python buffer callbacks cannot be preempted. `connect()` blocks its calling
+thread: run it on an appropriate worker when the caller has an event loop or
+latency-sensitive thread. Native waits release the GIL. There is no persistent
+background worker, implicit reconnect or asyncio runtime.
+
+Call `service()` regularly while idle to process peer records and authenticated
+closure. It skips a busy engine, does not wait for socket readiness and handles
+at most 32 datagrams per call. UDP silence alone cannot establish peer death.
+`close()` cancels pending waits and is idempotent. Failed and closed sessions
+cannot reconnect; create a new sender for a new association. Network failures
+raise `ConnectionError` or `TimeoutError`; invalid input raises `TypeError`,
+`ValueError` or `OverflowError` as appropriate. The library accepts 1–256
+channels without asserting a physical bridge limit. Independent oracle tests
+are protocol evidence; physical bridge acceptance and sender performance need
+separate measurement.
+
 ## Vendor encoders and Nanoleaf
 
 `ledfx_senders.encoders` provides `encode_adalight(frame, color_order)`,
 `encode_openrgb(frame, device_id)`, `encode_hue(frame, entertainment_id,
 channel_ids, sequence)`, and `encode_govee(frame, stretch)`. Each returns owned
-`bytes`; the caller keeps its serial, OpenRGB v3 TCP, Hue DTLS or Govee shared
-socket session. `RGBGather(permutation).encode(frame)` caches an immutable RGB
+`bytes`; encoder callers keep their serial, OpenRGB v3 TCP, Hue DTLS or Govee
+shared socket session. `HueSender` below owns its DTLS session instead. `RGBGather(permutation).encode(frame)` caches an immutable RGB
 permutation for SDK-owned streaming; it does not implement SDK transport.
 
 For example, encoding bytes does not open or negotiate a device session:
@@ -420,3 +474,24 @@ locked tool and configuration; publication rejects missing platform coverage.
 PyPI publication copies verified distributions into a fresh `pypi-dist/` after
 `check-upload` succeeds. The uploader's `.publish.attestation` files stay in that
 copy; GitHub attestations and all shared release phases retain the frozen `dist/`.
+
+Hue release gates keep test OpenSSL tooling separate from production wheels.
+The Linux native gate runs Cargo probes against a strict independent fixture;
+all 35 installed interpreter/platform cells run public interoperability,
+including decrypted vectors, strict identity, wrong keys and unsupported suites.
+Cibuildwheel's container checks select `not native_probe and not hue_oracle`;
+the required host runtime and source-install gates select `not native_probe`
+and supply the oracle. Missing required tooling fails. Developers can explicitly
+opt out locally with `pytest -m 'not native_probe and not hue_oracle'`.
+
+`ci/build_hue_oracle.py --output PATH --openssl-prefix PATH` builds the test
+fixture and prints header, linked-library and OpenSSL CLI versions. Linux uses
+system OpenSSL 3 development packages; macOS uses Homebrew `openssl@3`; Windows
+uses the runner image's full `%ProgramFiles%\OpenSSL` installation and Visual
+Studio x64 tools. Those platform installations are described by the
+[GitHub runner image definitions](https://github.com/actions/runner-images).
+The build fails if headers, import libraries, compiler or CLI are missing.
+Repaired wheels are audited with `auditwheel show`, `delocate-listdeps` or
+`dumpbin /DEPENDENTS`; unexpected OpenSSL, mbedTLS, AWS-LC or test-oracle payloads
+block release. Audit artifacts record the checked-out source SHA and wheel
+SHA-256 hashes. The production DTLS provider is the locked ring-only RTC graph.

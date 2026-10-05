@@ -1,14 +1,19 @@
 """Public owned Hue sender; strict independent oracle uses dummy credentials."""
 
-import os
+import subprocess
 from collections.abc import Iterator
-from pathlib import Path
 from threading import Thread
 from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
-from hue_support import StrictOracle, lifecycle_watchdog, socket_handles
+from hue_support import (
+    StrictOracle,
+    lifecycle_watchdog,
+    openssl_executable,
+    oracle_executable,
+    socket_handles,
+)
 
 from ledfx_senders import _native
 from ledfx_senders.frames import Frame
@@ -132,10 +137,11 @@ def test_send_requires_connection_and_matching_count() -> None:
 
 @pytest.fixture
 def oracle() -> Iterator[StrictOracle]:
-    with StrictOracle(Path(os.environ["HUE_ORACLE"]), IDENTITY, KEY) as peer:
+    with StrictOracle(oracle_executable(), IDENTITY, KEY) as peer:
         yield peer
 
 
+@pytest.mark.hue_oracle
 @pytest.mark.parametrize(
     "rgb,ids,suffix",
     [
@@ -187,6 +193,7 @@ def test_literal_vectors_and_sequence_is_constant(
     assert sender.closed and not sender.connected
 
 
+@pytest.mark.hue_oracle
 @pytest.mark.parametrize(
     "frame,want",
     [
@@ -203,7 +210,9 @@ def test_literal_vectors_and_sequence_is_constant(
     ],
 )
 def test_numeric_frames_match_wire(
-    oracle: StrictOracle, frame: Frame, want: bytes
+    oracle: StrictOracle,
+    frame: Frame,
+    want: bytes,
 ) -> None:
     sender = make_sender(oracle.port)
     expected = (
@@ -219,6 +228,7 @@ def test_numeric_frames_match_wire(
         sender.close()
 
 
+@pytest.mark.hue_oracle
 @pytest.mark.parametrize("dtype", ["f4", "f8", ">f8", np.longdouble])
 @pytest.mark.parametrize(
     "levels,error",
@@ -230,7 +240,10 @@ def test_numeric_frames_match_wire(
     ],
 )
 def test_invalid_numeric_input_leaves_session_usable(
-    oracle: StrictOracle, dtype: object, levels: list[float], error: type[Exception]
+    oracle: StrictOracle,
+    dtype: object,
+    levels: list[float],
+    error: type[Exception],
 ) -> None:
     sender = make_sender(oracle.port)
     try:
@@ -245,6 +258,7 @@ def test_invalid_numeric_input_leaves_session_usable(
         sender.close()
 
 
+@pytest.mark.hue_oracle
 def test_uppercase_uuid_is_preserved(oracle: StrictOracle) -> None:
     from ledfx_senders.hue import HueSender
 
@@ -264,6 +278,7 @@ def test_uppercase_uuid_is_preserved(oracle: StrictOracle) -> None:
         sender.close()
 
 
+@pytest.mark.hue_oracle
 def test_snapshot_owns_mutable_frame_before_session_lock(oracle: StrictOracle) -> None:
     sender = make_sender(oracle.port)
     sender.connect()
@@ -292,6 +307,7 @@ def test_snapshot_owns_mutable_frame_before_session_lock(oracle: StrictOracle) -
     assert oracle.receive(59, 2)[52:] == b"\7\1\1\2\2\3\3"
 
 
+@pytest.mark.hue_oracle
 def test_buffer_callbacks_can_reenter_service(oracle: StrictOracle) -> None:
     if __import__("sys").version_info < (3, 12):
         pytest.skip("Python buffer protocol hook requires 3.12+")
@@ -337,11 +353,13 @@ def test_silent_connect_has_bounded_timeout_and_releases_resources() -> None:
     lifecycle_watchdog("silent")
 
 
+@pytest.mark.hue_oracle
 def test_failed_connect_cannot_reconnect(oracle: StrictOracle) -> None:
     lifecycle_watchdog("failed", oracle.port)
     oracle.expect_no_plaintext(0.03)
 
 
+@pytest.mark.hue_oracle
 def test_simultaneous_send_service_close_releases_connected_owner(
     oracle: StrictOracle,
 ) -> None:
@@ -349,6 +367,7 @@ def test_simultaneous_send_service_close_releases_connected_owner(
     oracle.expect_no_plaintext(0.03)
 
 
+@pytest.mark.hue_oracle
 def test_all_256_unique_channels_are_representable(oracle: StrictOracle) -> None:
     import socket
 
@@ -395,6 +414,7 @@ def test_all_256_unique_channels_are_representable(oracle: StrictOracle) -> None
         sender.close()
 
 
+@pytest.mark.hue_oracle
 def test_connected_connect_is_a_noop_even_when_engine_is_busy(
     oracle: StrictOracle,
 ) -> None:
@@ -433,6 +453,7 @@ def test_connected_connect_is_a_noop_even_when_engine_is_busy(
     assert not failures, failures
 
 
+@pytest.mark.hue_oracle
 @pytest.mark.parametrize("operation", ["send", "close"])
 def test_expired_idle_operation_disposes_client_and_socket(
     oracle: StrictOracle, operation: str
@@ -476,6 +497,7 @@ def test_expired_idle_operation_disposes_client_and_socket(
             pass  # This tiny cleanup budget may expire; resources must already be gone.
 
 
+@pytest.mark.hue_oracle
 def test_snapshot_expiry_disposes_idle_client_before_return(
     oracle: StrictOracle,
 ) -> None:
@@ -528,6 +550,7 @@ def test_snapshot_expiry_disposes_idle_client_before_return(
         sender.close()
 
 
+@pytest.mark.hue_oracle
 def test_close_cancellation_after_successful_finish_disposes_owner_resources(
     oracle: StrictOracle,
 ) -> None:
@@ -574,6 +597,7 @@ def test_close_cancellation_after_successful_finish_disposes_owner_resources(
     oracle.expect_no_plaintext(0.03)
 
 
+@pytest.mark.hue_oracle
 @pytest.mark.parametrize("sequence", [0, 255])
 def test_ipv6_authenticated_literal_frames(sequence: int) -> None:
     import socket
@@ -585,7 +609,7 @@ def test_ipv6_authenticated_literal_frames(sequence: int) -> None:
             capability.bind(("::1", 0))
     except OSError as exc:
         pytest.skip(f"IPv6 loopback unavailable: {exc}")
-    with StrictOracle(Path(os.environ["HUE_ORACLE"]), IDENTITY, KEY, ipv6=True) as peer:
+    with StrictOracle(oracle_executable(), IDENTITY, KEY, ipv6=True) as peer:
         sender = HueSender(
             destination="::1",
             port=peer.port,
@@ -612,10 +636,11 @@ def test_ipv6_authenticated_literal_frames(sequence: int) -> None:
             sender.close()
 
 
+@pytest.mark.hue_oracle
 def test_idle_peer_close_notify_service_disposes_and_send_fails() -> None:
     import time
 
-    with StrictOracle(Path(os.environ["HUE_ORACLE"]), IDENTITY, KEY) as peer:
+    with StrictOracle(oracle_executable(), IDENTITY, KEY) as peer:
         sender = make_sender(peer.port)
         sender.connect()
         peer.command("close")
@@ -639,6 +664,7 @@ def test_idle_peer_close_notify_service_disposes_and_send_fails() -> None:
             sender.close()
 
 
+@pytest.mark.hue_oracle
 def test_authenticated_silence_does_not_imply_udp_peer_death(
     oracle: StrictOracle,
 ) -> None:
@@ -655,3 +681,78 @@ def test_authenticated_silence_does_not_imply_udp_peer_death(
         oracle.expect_no_plaintext(0.03)
     finally:
         oracle_sender.close()
+
+
+@pytest.mark.hue_oracle
+@pytest.mark.parametrize("identity, accepted", [(IDENTITY, True), (b"wrong", False)])
+def test_oracle_enforces_identity(
+    oracle: StrictOracle,
+    identity: bytes,
+    accepted: bool,
+) -> None:
+    command = [
+        openssl_executable(),
+        "s_client",
+        "-dtls1_2",
+        "-connect",
+        f"127.0.0.1:{oracle.port}",
+        "-cipher",
+        "PSK-AES128-GCM-SHA256",
+        "-psk_identity",
+        identity.decode(),
+        "-psk",
+        KEY.hex(),
+        "-quiet",
+        "-ign_eof",
+    ]
+    client = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        assert client.stdin is not None
+        client.stdin.write(b"strict-oracle-identity-check")
+        client.stdin.flush()
+        if accepted:
+            assert oracle.receive(28, 2) == b"strict-oracle-identity-check"
+            assert oracle.identity == IDENTITY
+            assert oracle.negotiated == ("DTLSv1.2", "PSK-AES128-GCM-SHA256")
+        else:
+            oracle.expect_no_plaintext(timeout=0.3)
+    finally:
+        client.terminate()
+        client.wait(timeout=2)
+        if client.stdin is not None:
+            client.stdin.close()
+
+
+@pytest.mark.hue_oracle
+@pytest.mark.parametrize("rejection", ["identity", "key", "suite"])
+def test_public_sender_rejects_independent_peer(rejection: str) -> None:
+    from ledfx_senders import HueSender
+
+    with StrictOracle(
+        oracle_executable(),
+        IDENTITY,
+        KEY,
+        "PSK-AES128-CCM" if rejection == "suite" else "PSK-AES128-GCM-SHA256",
+    ) as peer:
+        sender = HueSender(
+            destination="127.0.0.1",
+            port=peer.port,
+            psk_identity=b"wrong" if rejection == "identity" else IDENTITY,
+            client_key=b"\xff" * 16 if rejection == "key" else KEY,
+            entertainment_id=UUID,
+            channel_ids=(7,),
+            connect_timeout=0.3,
+        )
+        try:
+            with pytest.raises((ConnectionError, TimeoutError)):
+                sender.connect()
+            assert not sender.connected
+            peer.expect_no_plaintext(0.03)
+            assert not peer.authenticated
+        finally:
+            sender.close()

@@ -1,17 +1,17 @@
 """Independent authenticated DTLS gate; all credentials are dummy fixture data."""
 
-import os
-import subprocess
 from collections.abc import Iterator
-from pathlib import Path
 
 import pytest
 from hue_support import (
     DatagramFaultRelay,
     FinalFlightDropRelay,
     StrictOracle,
+    oracle_executable,
     run_probe,
 )
+
+pytestmark = [pytest.mark.native_probe, pytest.mark.hue_oracle]
 
 IDENTITY = b"hue-fixture"
 KEY = bytes(range(16))
@@ -24,7 +24,7 @@ PAYLOAD = (
 
 @pytest.fixture
 def oracle() -> Iterator[StrictOracle]:
-    executable = Path(os.environ["HUE_ORACLE"])
+    executable = oracle_executable()
     with StrictOracle(executable, IDENTITY, KEY) as server:
         yield server
 
@@ -61,54 +61,10 @@ def test_probe_requires_authenticated_server_finished(oracle: StrictOracle) -> N
 
 
 def test_probe_ccm_only_is_rejected() -> None:
-    with StrictOracle(
-        Path(os.environ["HUE_ORACLE"]), IDENTITY, KEY, "PSK-AES128-CCM"
-    ) as server:
+    with StrictOracle(oracle_executable(), IDENTITY, KEY, "PSK-AES128-CCM") as server:
         result = run_probe("127.0.0.1", server.port, IDENTITY, KEY, PAYLOAD, 300)
         assert result.returncode == 2
         server.expect_no_plaintext(timeout=0.2)
-
-
-@pytest.mark.parametrize("identity, accepted", [(IDENTITY, True), (b"wrong", False)])
-def test_oracle_enforces_identity(
-    oracle: StrictOracle, identity: bytes, accepted: bool
-) -> None:
-    command = [
-        "openssl",
-        "s_client",
-        "-dtls1_2",
-        "-connect",
-        f"127.0.0.1:{oracle.port}",
-        "-cipher",
-        "PSK-AES128-GCM-SHA256",
-        "-psk_identity",
-        identity.decode(),
-        "-psk",
-        KEY.hex(),
-        "-quiet",
-        "-ign_eof",
-    ]
-    client = subprocess.Popen(
-        command,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    try:
-        assert client.stdin is not None
-        client.stdin.write(PAYLOAD)
-        client.stdin.flush()
-        if accepted:
-            assert oracle.receive(len(PAYLOAD), 2) == PAYLOAD
-            assert oracle.identity == IDENTITY
-            assert oracle.negotiated == ("DTLSv1.2", "PSK-AES128-GCM-SHA256")
-        else:
-            oracle.expect_no_plaintext(timeout=0.3)
-    finally:
-        client.terminate()
-        client.wait(timeout=2)
-        if client.stdin is not None:
-            client.stdin.close()
 
 
 @pytest.mark.parametrize("fault", ["drop", "reorder", "noise", "all"])
@@ -162,9 +118,7 @@ def test_fault_proxy_still_requires_server_finished(oracle: StrictOracle) -> Non
 
 def test_fault_proxy_rejects_ccm_only() -> None:
     with (
-        StrictOracle(
-            Path(os.environ["HUE_ORACLE"]), IDENTITY, KEY, "PSK-AES128-CCM"
-        ) as oracle,
+        StrictOracle(oracle_executable(), IDENTITY, KEY, "PSK-AES128-CCM") as oracle,
         DatagramFaultRelay(oracle.port, "all") as relay,
     ):
         result = run_probe("127.0.0.1", relay.port, IDENTITY, KEY, PAYLOAD, 2500)
@@ -186,7 +140,7 @@ def test_probe_rejects_corrupted_encrypted_server_finished(
 
 @pytest.mark.parametrize("ems", [True, False], ids=["ems", "non-ems"])
 def test_requested_ems_policy_accepts_both_independent_peers(ems: bool) -> None:
-    with StrictOracle(Path(os.environ["HUE_ORACLE"]), IDENTITY, KEY, ems=ems) as peer:
+    with StrictOracle(oracle_executable(), IDENTITY, KEY, ems=ems) as peer:
         result = run_probe("127.0.0.1", peer.port, IDENTITY, KEY, PAYLOAD, 1000)
         assert result.returncode == 0, result.stderr
         assert peer.receive(len(PAYLOAD), 2) == PAYLOAD
@@ -196,7 +150,7 @@ def test_requested_ems_policy_accepts_both_independent_peers(ems: bool) -> None:
 
 def test_certificate_only_peer_is_rejected() -> None:
     with StrictOracle(
-        Path(os.environ["HUE_ORACLE"]), IDENTITY, KEY, certificate_only=True
+        oracle_executable(), IDENTITY, KEY, certificate_only=True
     ) as peer:
         result = run_probe("127.0.0.1", peer.port, IDENTITY, KEY, PAYLOAD, 300)
         assert result.returncode == 2

@@ -1,14 +1,72 @@
 #define _POSIX_C_SOURCE 200809L
 /* Test-only strict PSK oracle. Arguments must contain dummy credentials only. */
-#include <openssl/ssl.h>
+#ifdef _WIN32
+#define _CRT_SECURE_NO_WARNINGS
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#include <io.h>
+typedef SOCKET socket_type;
+typedef int socklen_t;
+#define BAD_SOCKET INVALID_SOCKET
+#else
 #include <arpa/inet.h>
+#include <fcntl.h>
+#include <time.h>
+typedef int socket_type;
+#define BAD_SOCKET (-1)
+#endif
+#include <openssl/ssl.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
+
+static double deadline;
+static double seconds(void) {
+#ifdef _WIN32
+    return (double)GetTickCount64() / 1000.0;
+#else
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now)) exit(2);
+    return (double)now.tv_sec + (double)now.tv_nsec / 1000000000.0;
+#endif
+}
+static void watchdog(void) { if (seconds() >= deadline) exit(2); }
+static int waiting(void) {
+#ifdef _WIN32
+    int error = WSAGetLastError();
+    return error == WSAEWOULDBLOCK || error == WSAEINTR;
+#else
+    return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR;
+#endif
+}
+static int control_ready(void) {
+#ifdef _WIN32
+    DWORD available = 0;
+    return PeekNamedPipe(GetStdHandle(STD_INPUT_HANDLE), NULL, 0, NULL,
+                         &available, NULL) && available > 0;
+#else
+    fd_set controls;
+    FD_ZERO(&controls);
+    FD_SET(STDIN_FILENO, &controls);
+    struct timeval immediate = {0, 0};
+    return select(STDIN_FILENO + 1, &controls, NULL, NULL, &immediate) > 0;
+#endif
+}
+static void pause_briefly(void) {
+#ifdef _WIN32
+    Sleep(20);
+#else
+    struct timespec pause = {0, 20000000};
+    (void)nanosleep(&pause, NULL);
+#endif
+}
 
 static char expected_identity[256];
 static unsigned char expected_key[256];
@@ -69,7 +127,8 @@ static unsigned int psk_cb(SSL *ssl, const char *identity,
     return expected_key_len;
 }
 
-static int retry(SSL *ssl, int result, int fd) {
+static int retry(SSL *ssl, int result, socket_type fd) {
+    watchdog();
     int error = SSL_get_error(ssl, result);
     if (error != SSL_ERROR_WANT_READ && error != SSL_ERROR_WANT_WRITE) return 0;
     struct timeval timeout = {0, 20000};
@@ -81,17 +140,25 @@ static int retry(SSL *ssl, int result, int fd) {
     FD_ZERO(&writers);
     if (error == SSL_ERROR_WANT_READ) FD_SET(fd, &readers);
     else FD_SET(fd, &writers);
-    if (select(fd + 1, &readers, &writers, NULL, &timeout) < 0 && errno != EINTR) return 0;
+    if (select((int)fd + 1, &readers, &writers, NULL, &timeout) < 0 && !waiting()) return 0;
     return DTLSv1_handle_timeout(ssl) >= 0;
 }
 
 int main(int argc, char **argv) {
+    if (argc == 2 && !strcmp(argv[1], "--version")) {
+        printf("%s\n%s\n", OPENSSL_VERSION_TEXT, OpenSSL_version(OPENSSL_VERSION));
+        return 0;
+    }
     if (argc != 9) return 2;
+#ifdef _WIN32
+    WSADATA winsock;
+    if (WSAStartup(MAKEWORD(2, 2), &winsock)) return 2;
+#endif
     int identity_len = unhex(argv[1], (unsigned char *)expected_identity, sizeof(expected_identity) - 1);
     int key_len = unhex(argv[2], expected_key, sizeof(expected_key));
     if (identity_len < 0 || key_len < 0 || memchr(expected_identity, 0, (size_t)identity_len)) return 2;
     expected_key_len = (unsigned int)key_len;
-    alarm(8);
+    deadline = seconds() + 8.0;
     SSL_CTX *ctx = SSL_CTX_new(DTLS_server_method());
     if (!ctx || !SSL_CTX_set_min_proto_version(ctx, DTLS1_2_VERSION) ||
         !SSL_CTX_set_max_proto_version(ctx, DTLS1_2_VERSION) ||
@@ -101,21 +168,28 @@ int main(int argc, char **argv) {
         if (!certificate(ctx) || !SSL_CTX_set_cipher_list(ctx, "ECDHE-RSA-AES128-GCM-SHA256")) return 2;
     } else SSL_CTX_set_psk_server_callback(ctx, psk_cb);
     int family = !strcmp(argv[7], "6") ? AF_INET6 : AF_INET;
-    int fd = socket(family, SOCK_DGRAM | SOCK_NONBLOCK, 0);
+    socket_type fd = socket(family, SOCK_DGRAM, 0);
+    if (fd == BAD_SOCKET) return 2;
+#ifdef _WIN32
+    u_long nonblocking = 1;
+    if (ioctlsocket(fd, FIONBIO, &nonblocking)) return 2;
+#else
+    if (fcntl(fd, F_SETFL, O_NONBLOCK)) return 2;
+#endif
     struct sockaddr_storage local = {0};
     socklen_t address_len;
     if (family == AF_INET6) {
         struct sockaddr_in6 *address = (struct sockaddr_in6 *)&local;
         address->sin6_family = AF_INET6;
         address->sin6_addr = in6addr_loopback;
-        address_len = sizeof(*address);
+        address_len = (socklen_t)sizeof(*address);
     } else {
         struct sockaddr_in *address = (struct sockaddr_in *)&local;
         address->sin_family = AF_INET;
         address->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        address_len = sizeof(*address);
+        address_len = (socklen_t)sizeof(*address);
     }
-    if (fd < 0 || bind(fd, (struct sockaddr *)&local, address_len)) return 2;
+    if (bind(fd, (struct sockaddr *)&local, address_len)) return 2;
     if (getsockname(fd, (struct sockaddr *)&local, &address_len)) return 2;
     FILE *output = fopen(argv[4], "wb");
     metadata = fopen(argv[5], "wb");
@@ -126,18 +200,19 @@ int main(int argc, char **argv) {
     printf("READY %u\n", port);
     fflush(stdout);
     struct sockaddr_storage peer;
-    socklen_t peer_len = sizeof(peer);
+    socklen_t peer_len = (socklen_t)sizeof(peer);
     unsigned char buffer[65536];
-    while (recvfrom(fd, buffer, sizeof(buffer), MSG_PEEK, (struct sockaddr *)&peer, &peer_len) < 0) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) return 2;
+    while (recvfrom(fd, (char *)buffer, (int)sizeof(buffer), MSG_PEEK, (struct sockaddr *)&peer, &peer_len) < 0) {
+        watchdog();
+        if (!waiting()) return 2;
         fd_set readers;
         FD_ZERO(&readers);
         FD_SET(fd, &readers);
         struct timeval timeout = {0, 20000};
-        (void)select(fd + 1, &readers, NULL, NULL, &timeout);
+        (void)select((int)fd + 1, &readers, NULL, NULL, &timeout);
     }
     if (connect(fd, (struct sockaddr *)&peer, peer_len)) return 2;
-    BIO *bio = BIO_new_dgram(fd, BIO_NOCLOSE);
+    BIO *bio = BIO_new_dgram((int)fd, BIO_NOCLOSE);
     SSL *ssl = SSL_new(ctx);
     if (!bio || !ssl || BIO_ctrl(bio, BIO_CTRL_DGRAM_SET_CONNECTED, 0, &peer) <= 0) return 2;
     SSL_set_bio(ssl, bio, bio);
@@ -149,11 +224,8 @@ int main(int argc, char **argv) {
     fflush(metadata);
     int silent = 0;
     for (;;) {
-        fd_set controls;
-        FD_ZERO(&controls);
-        FD_SET(STDIN_FILENO, &controls);
-        struct timeval immediate = {0, 0};
-        if (select(STDIN_FILENO + 1, &controls, NULL, NULL, &immediate) > 0) {
+        watchdog();
+        if (control_ready()) {
             char command[32];
             if (!fgets(command, sizeof(command), stdin)) break;
             if (!strcmp(command, "close\n")) {
@@ -169,8 +241,7 @@ int main(int argc, char **argv) {
             fflush(stdout);
         }
         if (silent) {
-            struct timeval pause = {0, 20000};
-            (void)select(0, NULL, NULL, NULL, &pause);
+            pause_briefly();
             continue;
         }
         result = SSL_read(ssl, buffer, sizeof(buffer));
@@ -184,6 +255,11 @@ int main(int argc, char **argv) {
     fclose(metadata);
     SSL_free(ssl);
     SSL_CTX_free(ctx);
+#ifdef _WIN32
+    closesocket(fd);
+    WSACleanup();
+#else
     close(fd);
+#endif
     return 0;
 }

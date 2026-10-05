@@ -1,6 +1,8 @@
 """Strict external test oracle and private native probe driver. Dummy secrets only."""
 
 import faulthandler
+import os
+import queue
 import selectors
 import socket
 import subprocess
@@ -15,6 +17,22 @@ from types import TracebackType
 from typing import Self
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def oracle_executable() -> Path:
+    value = os.environ.get("HUE_ORACLE")
+    if value is not None and sys.platform == "win32" and not Path(value).is_file():
+        value += ".exe"
+    if value is None or not Path(value).is_file():
+        raise AssertionError(
+            "Hue interoperability requires HUE_ORACLE test tooling; "
+            "local opt-out: pytest -m 'not hue_oracle and not native_probe'"
+        )
+    return Path(value).resolve()
+
+
+def openssl_executable() -> str:
+    return os.environ.get("HUE_OPENSSL", "openssl")
 
 
 class FinalFlightDropRelay:
@@ -267,13 +285,13 @@ class StrictOracle:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
         )
+        self._lines: queue.Queue[bytes] = queue.Queue()
+        self._reader = Thread(
+            target=self._read_output, name="hue-oracle-output", daemon=True
+        )
+        self._reader.start()
         try:
-            assert self._process.stdout is not None
-            with selectors.DefaultSelector() as selector:
-                selector.register(self._process.stdout, selectors.EVENT_READ)
-                if not selector.select(timeout=2):
-                    raise AssertionError("oracle did not become ready")
-                line = self._process.stdout.readline().decode("ascii")
+            line = self._readline().decode("ascii")
             assert line.startswith("READY "), "oracle startup failed"
             self.port = int(line.split()[1])
         except BaseException:
@@ -307,13 +325,18 @@ class StrictOracle:
         self._process.stdin.write((command + "\n").encode("ascii"))
         self._process.stdin.flush()
         # Fixture acknowledges only after executing the requested operation.
+        assert self._readline() == ("DONE " + command + "\n").encode()
+
+    def _read_output(self) -> None:
         assert self._process.stdout is not None
-        with selectors.DefaultSelector() as selector:
-            selector.register(self._process.stdout, selectors.EVENT_READ)
-            assert selector.select(timeout=2), "oracle control was not acknowledged"
-            assert (
-                self._process.stdout.readline() == ("DONE " + command + "\n").encode()
-            )
+        for line in self._process.stdout:
+            self._lines.put(line)
+
+    def _readline(self) -> bytes:
+        try:
+            return self._lines.get(timeout=2).replace(b"\r\n", b"\n")
+        except queue.Empty as exc:
+            raise AssertionError("oracle output was not acknowledged") from exc
 
     @property
     def authenticated(self) -> bool:
@@ -361,6 +384,8 @@ class StrictOracle:
                 self._process.wait(timeout=2)
         if self._process.stdin is not None:
             self._process.stdin.close()
+        self._reader.join(timeout=2)
+        assert not self._reader.is_alive(), "oracle output reader failed to stop"
         if self._process.stdout is not None:
             self._process.stdout.close()
         self._temporary.cleanup()
