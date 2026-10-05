@@ -17,6 +17,8 @@ typedef int socket_type;
 #define BAD_SOCKET (-1)
 #endif
 #include <openssl/ssl.h>
+#include <openssl/rand.h>
+#include <openssl/crypto.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -72,12 +74,35 @@ static char expected_identity[256];
 static unsigned char expected_key[256];
 static unsigned int expected_key_len;
 static FILE *metadata;
+/* This bounded fixture serves one connected peer and one association. */
+static unsigned char expected_cookie[32];
+static unsigned int cookie_challenges;
+static unsigned int cookies_verified;
+
+static int cookie_generate_cb(SSL *ssl, unsigned char *cookie,
+                              unsigned int *length) {
+    (void)ssl;
+    memcpy(cookie, expected_cookie, sizeof(expected_cookie));
+    *length = (unsigned int)sizeof(expected_cookie);
+    return 1;
+}
+
+static int cookie_verify_cb(SSL *ssl, const unsigned char *cookie,
+                            unsigned int length) {
+    (void)ssl;
+    if (length != sizeof(expected_cookie) ||
+        CRYPTO_memcmp(cookie, expected_cookie, sizeof(expected_cookie)) != 0) return 0;
+    cookies_verified++;
+    return 1;
+}
 
 /* Observe actual OpenSSL-generated alerts; never create records or do crypto. */
 static void message_cb(int writing, int version, int type, const void *data,
                        size_t length, SSL *ssl, void *arg) {
     (void)version; (void)ssl; (void)arg;
     const unsigned char *bytes = data;
+    if (writing && type == SSL3_RT_HANDSHAKE && length > 0 &&
+        bytes[0] == DTLS1_MT_HELLO_VERIFY_REQUEST) cookie_challenges++;
     if (writing && type == SSL3_RT_ALERT && length == 2 && bytes[0] == 2) {
         fprintf(metadata, "FATAL %u\n", (unsigned int)bytes[1]);
         fflush(metadata);
@@ -149,7 +174,7 @@ int main(int argc, char **argv) {
         printf("%s\n%s\n", OPENSSL_VERSION_TEXT, OpenSSL_version(OPENSSL_VERSION));
         return 0;
     }
-    if (argc != 9) return 2;
+    if (argc != 10) return 2;
 #ifdef _WIN32
     WSADATA winsock;
     if (WSAStartup(MAKEWORD(2, 2), &winsock)) return 2;
@@ -163,6 +188,12 @@ int main(int argc, char **argv) {
     if (!ctx || !SSL_CTX_set_min_proto_version(ctx, DTLS1_2_VERSION) ||
         !SSL_CTX_set_max_proto_version(ctx, DTLS1_2_VERSION) ||
         !SSL_CTX_set_cipher_list(ctx, argv[3])) return 2;
+    if (!strcmp(argv[9], "cookie")) {
+        if (RAND_bytes(expected_cookie, (int)sizeof(expected_cookie)) != 1) return 2;
+        SSL_CTX_set_cookie_generate_cb(ctx, cookie_generate_cb);
+        SSL_CTX_set_cookie_verify_cb(ctx, cookie_verify_cb);
+        SSL_CTX_set_options(ctx, SSL_OP_COOKIE_EXCHANGE);
+    } else if (strcmp(argv[9], "no-cookie")) return 2;
     if (!strcmp(argv[6], "non-ems")) SSL_CTX_set_options(ctx, SSL_OP_NO_EXTENDED_MASTER_SECRET);
     if (!strcmp(argv[8], "certificate")) {
         if (!certificate(ctx) || !SSL_CTX_set_cipher_list(ctx, "ECDHE-RSA-AES128-GCM-SHA256")) return 2;
@@ -221,6 +252,8 @@ int main(int argc, char **argv) {
         if (!retry(ssl, result, fd)) goto done;
     }
     fprintf(metadata, "%s\n%s\n%s\nEMS %d\n", SSL_get_psk_identity(ssl), SSL_get_version(ssl), SSL_get_cipher_name(ssl), SSL_get_extms_support(ssl) == 1);
+    fprintf(metadata, "COOKIE_CHALLENGES %u\nCOOKIES_VERIFIED %u\n",
+            cookie_challenges, cookies_verified);
     fflush(metadata);
     int silent = 0;
     for (;;) {

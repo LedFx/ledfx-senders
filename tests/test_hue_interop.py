@@ -37,6 +37,18 @@ def test_probe_authenticates_and_delivers_plaintext(oracle: StrictOracle) -> Non
     assert oracle.negotiated == ("DTLSv1.2", "PSK-AES128-GCM-SHA256")
 
 
+def test_probe_answers_independent_cookie_challenge() -> None:
+    with StrictOracle(oracle_executable(), IDENTITY, KEY, cookie_exchange=True) as peer:
+        result = run_probe("127.0.0.1", peer.port, IDENTITY, KEY, PAYLOAD, 1000)
+        assert result.returncode == 0, result.stderr
+        assert peer.receive(len(PAYLOAD), 2) == PAYLOAD
+        assert peer.authenticated
+        assert peer.identity == IDENTITY
+        assert peer.negotiated == ("DTLSv1.2", "PSK-AES128-GCM-SHA256")
+        assert peer.cookie_challenged
+        assert peer.cookie_verified
+
+
 def test_probe_wrong_identity_is_rejected(oracle: StrictOracle) -> None:
     result = run_probe("127.0.0.1", oracle.port, b"wrong", KEY, PAYLOAD, 300)
     assert result.returncode == 2

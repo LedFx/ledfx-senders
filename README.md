@@ -356,8 +356,8 @@ closure. It skips a busy engine, does not wait for socket readiness and handles
 at most 32 datagrams per call. UDP silence alone cannot establish peer death.
 `close()` cancels pending waits and is idempotent. Failed and closed sessions
 cannot reconnect; create a new sender for a new association. Network failures
-raise `ConnectionError` or `TimeoutError`; invalid input raises `TypeError`,
-`ValueError` or `OverflowError` as appropriate. The library accepts 1–256
+raise `ConnectionError`, `TimeoutError` or transport `OSError`; invalid input
+raises `TypeError`, `ValueError` or `OverflowError` as appropriate. The library accepts 1–256
 channels without asserting a physical bridge limit. Independent oracle tests
 are protocol evidence; physical bridge acceptance and sender performance need
 separate measurement.

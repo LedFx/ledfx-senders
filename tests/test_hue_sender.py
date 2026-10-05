@@ -142,6 +142,33 @@ def oracle() -> Iterator[StrictOracle]:
 
 
 @pytest.mark.hue_oracle
+@pytest.mark.parametrize("cookie_exchange", [False, True], ids=["no-cookie", "cookie"])
+def test_public_sender_answers_independent_cookie_challenge(
+    cookie_exchange: bool,
+) -> None:
+    with StrictOracle(
+        oracle_executable(), IDENTITY, KEY, cookie_exchange=cookie_exchange
+    ) as peer:
+        sender = make_sender(peer.port)
+        expected = (
+            b"HueStream\x02\0\0\0\0\0\0"
+            + b"12345678-1234-1234-1234-123456789abc"
+            + b"\7\1\1\2\2\xff\xff"
+        )
+        try:
+            sender.connect()
+            sender.send(b"\1\2\xff")
+            assert peer.receive(len(expected), 2) == expected
+            assert peer.authenticated
+            assert peer.identity == IDENTITY
+            assert peer.negotiated == ("DTLSv1.2", "PSK-AES128-GCM-SHA256")
+            assert peer.cookie_challenged is cookie_exchange
+            assert peer.cookie_verified is cookie_exchange
+        finally:
+            sender.close()
+
+
+@pytest.mark.hue_oracle
 @pytest.mark.parametrize(
     "rgb,ids,suffix",
     [

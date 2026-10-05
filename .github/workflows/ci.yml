@@ -118,6 +118,11 @@ jobs:
           sudo apt-get install -y libssl-dev openssl
           rustup toolchain install 1.94.0 --profile minimal
           uv sync --frozen --group dev
+          # Match run_probe's debug profile and Python before any oracle watchdog.
+          PYO3_PYTHON="$(uv run --frozen --group dev python -c 'import sys; print(sys.executable)')"
+          export PYO3_PYTHON
+          echo "PYO3_PYTHON=$PYO3_PYTHON" >> "$GITHUB_ENV"
+          cargo build --manifest-path native/Cargo.toml --locked --example hue-probe
           uv run --frozen --only-group dev python ci/build_hue_oracle.py --output "$RUNNER_TEMP/hue-oracle" --github-env "$GITHUB_ENV"
       - name: Require native probe and public strict-oracle contracts
         run: uv run --frozen --group dev python -m pytest tests/test_hue_interop.py tests/test_hue_sender.py -q -rs

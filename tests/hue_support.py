@@ -264,6 +264,7 @@ class StrictOracle:
         ems: bool = True,
         ipv6: bool = False,
         certificate_only: bool = False,
+        cookie_exchange: bool = False,
     ) -> None:
         self._temporary = tempfile.TemporaryDirectory(prefix="hue-oracle-")
         directory = Path(self._temporary.name)
@@ -280,6 +281,7 @@ class StrictOracle:
                 "ems" if ems else "non-ems",
                 "6" if ipv6 else "4",
                 "certificate" if certificate_only else "psk",
+                "cookie" if cookie_exchange else "no-cookie",
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -348,6 +350,20 @@ class StrictOracle:
     @property
     def extended_master_secret(self) -> bool:
         return self._metadata.read_text().splitlines()[3] == "EMS 1"
+
+    @property
+    def cookie_challenged(self) -> bool:
+        return self._cookie_count("COOKIE_CHALLENGES") > 0
+
+    @property
+    def cookie_verified(self) -> bool:
+        return self._cookie_count("COOKIES_VERIFIED") > 0
+
+    def _cookie_count(self, name: str) -> int:
+        for line in self._metadata.read_text().splitlines():
+            if line.startswith(name + " "):
+                return int(line.split()[1])
+        raise AssertionError("oracle did not report cookie exchange evidence")
 
     @property
     def fatal_alert(self) -> int | None:
