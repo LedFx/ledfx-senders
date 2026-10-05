@@ -368,7 +368,7 @@ separate measurement.
 `encode_openrgb(frame, device_id)`, `encode_hue(frame, entertainment_id,
 channel_ids, sequence)`, and `encode_govee(frame, stretch)`. Each returns owned
 `bytes`; encoder callers keep their serial, OpenRGB v3 TCP, Hue DTLS or Govee
-shared socket session. `HueSender` below owns its DTLS session instead. `RGBGather(permutation).encode(frame)` caches an immutable RGB
+shared socket session. `HueSender` owns its DTLS session instead. `RGBGather(permutation).encode(frame)` caches an immutable RGB
 permutation for SDK-owned streaming; it does not implement SDK transport.
 
 For example, encoding bytes does not open or negotiate a device session:

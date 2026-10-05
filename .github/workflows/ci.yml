@@ -220,6 +220,9 @@ jobs:
       - name: Supply macOS OpenSSL 3 test tooling
         if: runner.os == 'macOS'
         run: HOMEBREW_NO_AUTO_UPDATE=1 brew install openssl@3
+      - name: Windows oracle command startup regressions
+        if: runner.os == 'Windows'
+        run: uv run --no-project --python 3.12 python -m unittest ci.test_hue_windows_tools -v
       - name: Build independent platform oracle and record OpenSSL versions
         shell: bash
         run: uv run --no-project --python 3.12 python ci/build_hue_oracle.py --output "$RUNNER_TEMP/hue-oracle" --github-env "$GITHUB_ENV"

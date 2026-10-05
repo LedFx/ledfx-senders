@@ -35,7 +35,9 @@ def windows_environment() -> dict[str, str]:
     ).strip()
     vcvars = Path(installation) / "VC/Auxiliary/Build/vcvars64.bat"
     result = subprocess.check_output(
-        ["cmd", "/d", "/s", "/c", f'"{vcvars}" >nul && set'],
+        # cmd parses its command tail itself; CRT list quoting would insert
+        # literal backslashes before the batch-path quotes.
+        f'"{os.environ["COMSPEC"]}" /d /s /c ""{vcvars}" >nul && set"',
         text=True,
         timeout=30,
     )
@@ -75,8 +77,13 @@ def build(output: Path, prefix: Path) -> dict[str, str]:
                 raise RuntimeError(
                     f"required OpenSSL import library missing: {libraries / name}"
                 )
+        compiler = shutil.which("cl", path=environment["PATH"])
+        if compiler is None:
+            raise RuntimeError(
+                "required Windows C compiler missing from developer PATH"
+            )
         command = [
-            "cl",
+            str(Path(compiler).resolve()),
             "/nologo",
             "/std:c11",
             "/W4",
