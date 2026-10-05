@@ -8,7 +8,7 @@ from typing import TypeAlias
 import numpy as np
 import pytest
 
-from ledfx_senders.packet_senders import DDPSender, OPCSender
+from ledfx_senders import DDPSender, OPCSender
 
 Sender: TypeAlias = DDPSender | OPCSender
 
@@ -251,7 +251,7 @@ def test_native_exporter_reentrancy(cls: type[Sender], callback: str) -> None:
         pytest.skip("Python buffer exporters require Python 3.12")
     script = """
 import sys
-from ledfx_senders.packet_senders import DDPSender, OPCSender
+from ledfx_senders import DDPSender, OPCSender
 cls = DDPSender if sys.argv[1] == 'ddp' else OPCSender
 sender = cls._test_sender(3 if cls is DDPSender else 1, destination='127.0.0.1', mode='capture')
 events = []
@@ -337,8 +337,8 @@ def test_invalid_configuration(cls: type[Sender], count: int) -> None:
 
 
 def test_protocol_numeric_policies_are_distinct() -> None:
-    from ledfx_senders.e131 import E131Sender
-    from ledfx_senders.e131_buffer import ChannelLayout
+    from ledfx_senders import E131Sender
+    from ledfx_senders.e131 import ChannelLayout
 
     frame = np.array([[-1.0, 256.0, 300.0]])
     ddp = capture(DDPSender, 3)

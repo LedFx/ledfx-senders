@@ -4,9 +4,9 @@ import socket
 from typing import Self
 
 from ledfx_senders import _native
+from ledfx_senders._validation import _integer
 from ledfx_senders.encoders import _rgb
 from ledfx_senders.frames import Frame
-from ledfx_senders.packet_senders import _integer
 
 
 class NanoleafSender:

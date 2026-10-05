@@ -11,6 +11,8 @@ from ledfx_senders import e131_packet
 from ledfx_senders.e131_buffer import ChannelLayout, normalize_frame
 from ledfx_senders.frames import Frame
 
+__all__ = ["ChannelLayout", "E131Sender"]
+
 _LOGGER = logging.getLogger(__name__)
 
 

@@ -6,9 +6,8 @@ setup codec. It has no LedFx application imports or dependency. NumPy is its onl
 runtime dependency.
 
 ```python
-from ledfx_senders import Frame
-from ledfx_senders.e131 import E131Sender
-from ledfx_senders.e131_buffer import ChannelLayout
+from ledfx_senders import E131Sender, Frame
+from ledfx_senders.e131 import ChannelLayout
 
 sender = E131Sender(ChannelLayout(300), destination="127.0.0.1", source_name="example")
 frame: Frame = bytes(300)
@@ -21,6 +20,15 @@ finally:
 `Frame` is the shared input type for all protocols: `bytes`, `bytearray`,
 `memoryview`, or `numpy.typing.NDArray[numpy.generic]`. Each protocol keeps its
 own shape, numeric validation and conversion rules.
+
+Import sender classes from the package root: `ArtNetSender`, `DDPSender`,
+`E131Sender`, `NanoleafSender`, `OPCSender`, `OSCSender`, and `UDPRealtimeSender`.
+Each implementation lives in its protocol module: `artnet`, `ddp`, `e131`,
+`nanoleaf`, `opc`, `osc`, or `udp_realtime`. Shared frame typing lives in
+`frames`; private helpers hold shared sender mechanics and scalar validation.
+The former `packet_senders` module retains compatibility exports for its five
+sender classes. Import E1.31 `ChannelLayout` from `ledfx_senders.e131`;
+`e131_buffer` contains the low-level packet banks and normalization helpers.
 
 `ChannelLayout` counts channels, not RGB pixels. `send` owns a snapshot before
 native conversion and submission. Callers must not mutate an input while its
@@ -262,7 +270,7 @@ more than the former borrowed-array equality check because snapshots are owned.
 
 ### Art-Net
 
-`ledfx_senders.packet_senders.ArtNetSender` owns a synchronous IPv4 UDP socket
+`ledfx_senders.ArtNetSender` owns a synchronous IPv4 UDP socket
 and caches the complete ArtDmx layout. Its keyword configuration is
 `destination`, `port`, `universe`, `packet_size`, `even_packet_size`,
 `dmx_start_address` (one based), `pixel_count`, `pixels_per_device`, `pre_amble`
@@ -343,7 +351,7 @@ cross-endian protocol guarantee. Govee supports 1..255 segments with LedFx's
 existing reverse-engineered BB00FAB0/XOR/base64/JSON representation. Encode speed
 is not serial baud rate, encrypted-session throughput or physical-device FPS.
 
-`ledfx_senders.nanoleaf.NanoleafSender(destination=..., port=..., version=...,
+`ledfx_senders.NanoleafSender(destination=..., port=..., version=...,
 panel_ids=(...))` owns UDP output and provides `send(frame)` and `close()`.
 Panel IDs must be unique and frame size must match the immutable layout.
 V1 allows 1..255 panels with u8 IDs; v2 allows 1..8188 with u16 IDs, limited by
