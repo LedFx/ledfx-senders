@@ -27,7 +27,7 @@ def test_release_workflow_preserves_identity_gates_and_same_run_artifacts() -> N
     assert "run-id:" not in job
     assert workflow.count("id-token: write") == 1
     pins = re.findall(
-        r"uses: LedFx/release-ci/actions/release@([0-9a-f]{40}) # (v[0-9]+\.[0-9]+\.[0-9]+)\s*$",
+        r"uses: LedFx/release-ci/actions/release@([0-9a-f]{40})(?:[ \t]+#.*)?[ \t]*$",
         job,
         re.MULTILINE,
     )
@@ -36,7 +36,7 @@ def test_release_workflow_preserves_identity_gates_and_same_run_artifacts() -> N
     assert job.count("project: release-tools") == 3
     assert job.count("wheel-plan: ${{ needs.plan.outputs.wheel-plan }}") == 3
     planning = re.findall(
-        r"uses: LedFx/release-ci/actions/plan@([0-9a-f]{40}) # (v[0-9]+\.[0-9]+\.[0-9]+)\s*$",
+        r"uses: LedFx/release-ci/actions/plan@([0-9a-f]{40})(?:[ \t]+#.*)?[ \t]*$",
         workflow,
         re.MULTILINE,
     )

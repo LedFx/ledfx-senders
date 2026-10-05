@@ -139,6 +139,9 @@ an abandoned newer draft can delay latest while older version publication remain
 possible. Retained snapshots and attestation bundles support inspection/retry.
 Use the [shared recovery guide](https://github.com/LedFx/release-ci#failure-and-recovery)
 and rerun failed jobs from the original run rather than rebuilding a version.
+If the failure requires changing a pinned action or workflow, publish a new patch
+version from the repaired workflow instead; a rerun retains the original source
+and action pins. Leave the failed version's tag and draft unchanged.
 This migration does not retroactively attest earlier releases.
 [Source provenance](PROVENANCE.md) records the original repository and benchmark
 evidence.
