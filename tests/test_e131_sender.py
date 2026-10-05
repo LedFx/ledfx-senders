@@ -1,5 +1,5 @@
-from ledfx_senders.e131 import E131Sender
-from ledfx_senders.e131_buffer import ChannelLayout
+from ledfx_senders import E131Sender
+from ledfx_senders.e131 import ChannelLayout
 
 
 def test_capture_sequence_and_close() -> None:
@@ -266,7 +266,7 @@ def test_buffer_protocol_reentrancy_under_subprocess_watchdog(
 
     script = textwrap.dedent("""
         import sys
-        from ledfx_senders.e131 import E131Sender
+        from ledfx_senders import E131Sender
         from ledfx_senders.e131_buffer import ChannelLayout, PacketBanks
         target, callback, wrapped = sys.argv[1:]
         events = []
@@ -340,7 +340,7 @@ def test_buffer_release_reentrancy_on_native_errors(
     script = textwrap.dedent("""
         import sys
         from array import array
-        from ledfx_senders.e131 import E131Sender
+        from ledfx_senders import E131Sender
         from ledfx_senders.e131_buffer import ChannelLayout, PacketBanks
         target, failure = sys.argv[1:]
         events = []

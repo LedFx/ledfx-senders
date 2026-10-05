@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from numpy.typing import NDArray
 
-from ledfx_senders.packet_senders import ArtNetSender
+from ledfx_senders import ArtNetSender
 
 
 def sender(
@@ -205,7 +205,7 @@ def test_reentrant_exporter_cleanup(failure: str) -> None:
     script = """
 import sys
 from array import array
-from ledfx_senders.packet_senders import ArtNetSender
+from ledfx_senders import ArtNetSender
 failure=sys.argv[1]
 sender=ArtNetSender._test_sender(destination="127.0.0.1",port=6454,universe=0,packet_size=510,even_packet_size=True,dmx_start_address=1,pixel_count=1,pixels_per_device=0,pre_amble=b"",post_amble=b"",rgb_order="RGB",white_mode="None",broadcast=False,mode="capture")
 events=[]

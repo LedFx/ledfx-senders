@@ -2,7 +2,6 @@
 
 import argparse
 import hashlib
-import importlib
 import json
 import shutil
 import subprocess
@@ -52,15 +51,14 @@ def main(verify: bool) -> None:
         originals[str(path)] = digest(path)
 
     retain(Path(sys.executable), "interpreter/" + Path(sys.executable).name)
-    for module in (
-        "ledfx_senders._native",
-        "ledfx_senders.encoders",
-        "ledfx_senders.packet_senders",
-        "ledfx_senders.original",
-    ):
-        loaded = importlib.import_module(module)
-        assert loaded.__file__ is not None, module
-        retain(Path(loaded.__file__), "loaded/" + Path(loaded.__file__).name)
+    import ledfx_senders
+    from ledfx_senders import _native
+
+    assert ledfx_senders.__file__ is not None
+    package = Path(ledfx_senders.__file__).resolve().parent
+    retain(Path(_native.__file__), "loaded/" + Path(_native.__file__).name)
+    for source in sorted(package.rglob("*.py")):
+        retain(source, "loaded/" + source.relative_to(package).as_posix())
     for label in ("candidate", "control"):
         wheels = list((root / (label + "-wheels")).glob("*.whl"))
         assert len(wheels) == 1, wheels

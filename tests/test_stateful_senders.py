@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from numpy.typing import NDArray
 
-from ledfx_senders.packet_senders import OSCSender, UDPRealtimeSender
+from ledfx_senders import OSCSender, UDPRealtimeSender
 
 MODES = ["One_Argument", "Three_Arguments", "Three_Addresses", "All_To_One"]
 
@@ -336,7 +336,7 @@ def test_reentrant_exporter_cleanup(protocol: str, failure: str) -> None:
     script = """
 import sys
 from array import array
-from ledfx_senders.packet_senders import OSCSender, UDPRealtimeSender
+from ledfx_senders import OSCSender, UDPRealtimeSender
 protocol,failure=sys.argv[1:]
 sender=(OSCSender._test_sender(destination='127.0.0.1',pixel_count=1,path='/x',send_type='One_Argument',mode='capture') if protocol=='osc' else UDPRealtimeSender._test_sender(destination='127.0.0.1',pixel_count=1,packet_type='DRGB',timeout=1,minimise_traffic=True,mode='capture'))
 events=[]

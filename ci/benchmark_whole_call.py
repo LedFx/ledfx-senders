@@ -48,9 +48,14 @@ def worker(package: str) -> None:
     sys.path.insert(0, str(Path(package).resolve()))
     import numpy as np
 
-    from ledfx_senders import _native, encoders, packet_senders
+    import ledfx_senders
+    from ledfx_senders import _native, encoders
+
+    # The pinned historical control predates protocol modules and root exports.
     from ledfx_senders.packet_senders import ArtNetSender
 
+    assert ledfx_senders.__file__ is not None
+    package_root = Path(ledfx_senders.__file__).resolve().parent
     print(
         json.dumps(
             {
@@ -62,8 +67,7 @@ def worker(package: str) -> None:
                     p: digest(p)
                     for p in (
                         _native.__file__,
-                        encoders.__file__,
-                        packet_senders.__file__,
+                        *(str(source) for source in sorted(package_root.rglob("*.py"))),
                     )
                 },
             }

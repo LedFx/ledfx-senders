@@ -8,8 +8,8 @@ import numpy as np
 import pytest
 from numpy.typing import DTypeLike
 
+from ledfx_senders import Frame
 from ledfx_senders import encoders as vendor
-from ledfx_senders.e131_buffer import Frame
 
 
 @pytest.mark.parametrize(

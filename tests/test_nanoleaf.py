@@ -5,7 +5,7 @@ import socket
 import numpy as np
 import pytest
 
-from ledfx_senders.nanoleaf import NanoleafSender
+from ledfx_senders import NanoleafSender
 
 
 def sender(
@@ -158,7 +158,7 @@ def test_reentrant_exporter_cleanup(failure: str) -> None:
     script = """
 import sys
 from array import array
-from ledfx_senders.nanoleaf import NanoleafSender
+from ledfx_senders import NanoleafSender
 failure=sys.argv[1]
 sender=NanoleafSender._test_sender(destination="127.0.0.1",port=60222,version=1,panel_ids=(7,),mode="capture")
 events=[]
