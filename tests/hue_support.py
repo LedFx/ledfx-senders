@@ -439,7 +439,6 @@ def _lifecycle_scenario(case: str, port: int) -> None:
         ), failures
         assert not sender.connected
         assert not sender._engine._test_has_client()
-        peer.close()
     elif case == "failed":
         invoke(sender.connect)
         assert len(failures) == 1 and isinstance(
@@ -530,6 +529,17 @@ def _lifecycle_scenario(case: str, port: int) -> None:
         ), failures
         assert not sender._engine._test_has_client()
 
+    if case in {"failed", "silent"}:
+        # Failure itself must forbid reuse, before explicit close can mask it.
+        try:
+            sender.connect()
+        except ConnectionError:
+            pass
+        else:
+            raise AssertionError("failed connect allowed session reuse before close")
+        assert not sender.connected and not sender._engine._test_has_client()
+    if peer is not None:
+        peer.close()
     sender.close()
     sender.close()
     assert sender.closed and not sender.connected
