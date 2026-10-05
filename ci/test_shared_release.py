@@ -7,6 +7,8 @@ import textwrap
 import tomllib
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -137,3 +139,83 @@ def test_upload_sidecars_leave_frozen_inputs_unchanged(tmp_path: Path) -> None:
     assert retry.returncode != 0
     assert {p.name: p.read_bytes() for p in staging.iterdir()} == before_retry
     assert {p.name: p.read_bytes() for p in original.iterdir()} == frozen
+
+
+def _resolved_source(expression: str, context: dict[str, str]) -> str:
+    expression = expression.strip()
+    assert expression.startswith("${{") and expression.endswith("}}"), expression
+    terms = [term.strip() for term in expression[3:-2].split("||")]
+    assert terms in (
+        ["github.sha"],
+        ["github.event.pull_request.head.sha", "github.sha"],
+    ), "unsupported source binding"
+    return next(context[term] for term in terms if context[term])
+
+
+def _step_binding(step: str, key: str, default: str | None = None) -> str:
+    match = re.search(rf"(?m)^\s+{re.escape(key)}: (.+)$", step)
+    if match is not None:
+        return match.group(1)
+    assert default is not None, f"missing {key} binding"
+    return default
+
+
+@pytest.mark.parametrize("event", ["pull_request", "main", "tag"])
+def test_plan_source_matches_actual_checkout_and_audit(
+    tmp_path: Path, event: str
+) -> None:
+    def git(*arguments: str) -> str:
+        return subprocess.check_output(
+            ["git", "-C", str(tmp_path), *arguments],
+            text=True,
+            stderr=subprocess.PIPE,
+            timeout=10,
+        ).strip()
+
+    git("init", "--quiet", "--initial-branch=main")
+    commit = (
+        "-c",
+        "user.name=Source Binding Test",
+        "-c",
+        "user.email=source@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--quiet",
+        "--allow-empty",
+        "-m",
+    )
+    git(*commit, "PR source")
+    pull_request_head = git("rev-parse", "HEAD")
+    git(*commit, "Event source differs from PR head")
+    event_sha = git("rev-parse", "HEAD")
+    context = {
+        "github.event.pull_request.head.sha": pull_request_head
+        if event == "pull_request"
+        else "",
+        "github.sha": event_sha,
+    }
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    planning_job = workflow.split("\n  plan:\n", 1)[1].split("\n  lint:\n", 1)[0]
+    steps = re.split(r"(?m)^      - ", planning_job)
+    checkout = next(step for step in steps if "uses: actions/checkout@" in step)
+    planner = next(
+        step for step in steps if "uses: LedFx/release-ci/actions/plan@" in step
+    )
+    checkout_sha = _resolved_source(_step_binding(checkout, "ref"), context)
+    # The pinned plan action's published default is github.sha. Exercise that
+    # default when the consumer omits its input, reproducing the hosted failure.
+    supplied_sha = _resolved_source(
+        _step_binding(planner, "source-sha", "${{ github.sha }}"), context
+    )
+    audit_sha = _resolved_source(_step_binding(workflow, "SOURCE_SHA"), context)
+    git("checkout", "--quiet", "--detach", checkout_sha)
+    actual_head = git("rev-parse", "HEAD")
+    expected = pull_request_head if event == "pull_request" else event_sha
+    assert actual_head == expected
+    assert supplied_sha == actual_head, "plan input labels another source as tested"
+    assert audit_sha == actual_head, "wheel audit labels another source as tested"
+    if event == "pull_request":
+        assert supplied_sha != event_sha, (
+            "synthetic PR merge must not label head wheels"
+        )

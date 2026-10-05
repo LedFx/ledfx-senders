@@ -39,6 +39,8 @@ jobs:
         run: uv run --no-project --python 3.12 python ci/release_guard.py
       - id: wheels
         uses: LedFx/release-ci/actions/plan@442e00705d4e5edd589021851e756761363f9d84 # v0.3.1
+        with:
+          source-sha: ${{ github.event.pull_request.head.sha || github.sha }}
 
   lint:
     name: Lint and workflow security
