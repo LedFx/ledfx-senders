@@ -37,7 +37,7 @@ jobs:
       - id: plan
         run: uv run --no-project --python 3.12 python ci/release_guard.py
       - id: wheels
-        uses: LedFx/release-ci/actions/plan@9208ca5f76bb659d8b8bcb232590db52af3de026 # reviewed draft-release lookup fix
+        uses: LedFx/release-ci/actions/plan@442e00705d4e5edd589021851e756761363f9d84 # v0.3.1
 
   lint:
     name: Lint and workflow security
@@ -301,7 +301,7 @@ jobs:
         id: prepare
         env:
           GH_TOKEN: ${{ steps.release-token.outputs.token }}
-        uses: LedFx/release-ci/actions/release@9208ca5f76bb659d8b8bcb232590db52af3de026 # reviewed draft-release lookup fix
+        uses: LedFx/release-ci/actions/release@442e00705d4e5edd589021851e756761363f9d84 # v0.3.1
         with:
           phase: prepare
           project: release-tools
@@ -320,7 +320,7 @@ jobs:
         id: upload
         env:
           GH_TOKEN: ${{ steps.release-token.outputs.token }}
-        uses: LedFx/release-ci/actions/release@9208ca5f76bb659d8b8bcb232590db52af3de026 # reviewed draft-release lookup fix
+        uses: LedFx/release-ci/actions/release@442e00705d4e5edd589021851e756761363f9d84 # v0.3.1
         with:
           phase: check-upload
           project: release-tools
@@ -342,7 +342,7 @@ jobs:
       - name: Verify provenance and finalize existing GitHub draft
         env:
           GH_TOKEN: ${{ steps.release-token.outputs.token }}
-        uses: LedFx/release-ci/actions/release@9208ca5f76bb659d8b8bcb232590db52af3de026 # reviewed draft-release lookup fix
+        uses: LedFx/release-ci/actions/release@442e00705d4e5edd589021851e756761363f9d84 # v0.3.1
         with:
           phase: finalize
           project: release-tools
