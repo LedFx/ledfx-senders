@@ -5,7 +5,7 @@ from typing import cast
 import numpy as np
 from numpy.typing import NDArray
 
-from ledfx_senders.e131_buffer import Frame
+from ledfx_senders.frames import Frame
 
 
 def original(frame: Frame, count: int) -> tuple[Frame, int]:

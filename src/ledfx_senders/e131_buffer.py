@@ -1,15 +1,16 @@
 """Owned frame buffers and explicit E1.31 channel conversion policy."""
 
 from dataclasses import dataclass, field
-from typing import TypeAlias, cast
+from typing import cast
 
 import numpy as np
 from numpy.typing import NDArray
 
 from ledfx_senders import _native as _e131
 from ledfx_senders.e131_packet import data_template
+from ledfx_senders.frames import Frame
 
-Frame: TypeAlias = bytes | bytearray | memoryview | NDArray[np.generic]
+__all__ = ["ChannelLayout", "Frame", "PacketBanks", "normalize_frame"]
 
 
 @dataclass(frozen=True)

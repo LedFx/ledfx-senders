@@ -14,7 +14,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from ledfx_senders import _native
-from ledfx_senders.e131_buffer import Frame
+from ledfx_senders.frames import Frame
 from ledfx_senders.packet_senders import _integer
 
 Policy = Literal["wrap", "strict", "clip"]

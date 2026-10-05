@@ -8,7 +8,8 @@ from uuid import UUID, uuid4
 
 from ledfx_senders import _native as _e131
 from ledfx_senders import e131_packet
-from ledfx_senders.e131_buffer import ChannelLayout, Frame, normalize_frame
+from ledfx_senders.e131_buffer import ChannelLayout, normalize_frame
+from ledfx_senders.frames import Frame
 
 _LOGGER = logging.getLogger(__name__)
 

@@ -6,15 +6,21 @@ setup codec. It has no LedFx application imports or dependency. NumPy is its onl
 runtime dependency.
 
 ```python
+from ledfx_senders import Frame
 from ledfx_senders.e131 import E131Sender
 from ledfx_senders.e131_buffer import ChannelLayout
 
 sender = E131Sender(ChannelLayout(300), destination="127.0.0.1", source_name="example")
+frame: Frame = bytes(300)
 try:
-    sender.send(bytes(300))
+    sender.send(frame)
 finally:
     sender.close()
 ```
+
+`Frame` is the shared input type for all protocols: `bytes`, `bytearray`,
+`memoryview`, or `numpy.typing.NDArray[numpy.generic]`. Each protocol keeps its
+own shape, numeric validation and conversion rules.
 
 `ChannelLayout` counts channels, not RGB pixels. `send` owns a snapshot before
 native conversion and submission. Callers must not mutate an input while its

@@ -7,7 +7,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from ledfx_senders import _native
-from ledfx_senders.e131_buffer import Frame
+from ledfx_senders.frames import Frame
 
 
 def _integer(value: int, name: str, low: int, high: int) -> None:

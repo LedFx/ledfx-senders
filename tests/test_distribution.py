@@ -24,10 +24,12 @@ class BlockApplication(importlib.abc.MetaPathFinder):
         if fullname == 'ledfx' or fullname.startswith('ledfx.'):
             raise ModuleNotFoundError('LedFx application intentionally unavailable')
 sys.meta_path.insert(0, BlockApplication())
+from ledfx_senders import Frame
 from ledfx_senders.e131 import E131Sender
 from ledfx_senders.e131_buffer import ChannelLayout
 sender = E131Sender._test_sender(ChannelLayout(3), destination='multicast', source_name='independent', mode='capture')
-sender.send(bytes([1, 2, 3]))
+frame: Frame = bytes([1, 2, 3])
+sender.send(frame)
 assert sender._engine.captures()[0][0][126:129] == bytes([1, 2, 3])
 sender.close(False)
 from ledfx_senders import DDPSender, OPCSender
