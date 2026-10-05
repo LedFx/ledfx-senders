@@ -104,16 +104,30 @@ runs `.github/workflows/ci.yml`. An early guard requires the tag, project,
 Python package, Rust package, lockfiles and release manifest versions to agree.
 All five platform builds, 35 installed-wheel variants and source/native checks
 must pass before publishing the same run's `sender-dist` artifact to PyPI.
-The GitHub draft is finalized with those tested assets after PyPI succeeds;
-publication jobs never rebuild packages. PR, branch and manual validation cannot
-publish, even when manually validating a tag.
+One queued publication job calls the SHA-pinned
+[shared release transaction](https://github.com/LedFx/release-ci), using the exact
+35-wheel/sdist policy in `.github/release-policy.json`. It validates archive
+metadata, tag/source identity and matching remote hashes before upload, verifies
+GitHub provenance against this repository's `ci.yml`, then finalizes the existing
+draft by immutable ID last. Publication never rebuilds packages. PR, branch and
+manual validation cannot publish, even when manually validating a tag.
 
-PyPI trusted publisher identity is owner `LedFx`, repository `ledfx-senders`,
-workflow `ci.yml`, environment `pypi`. Only the PyPI job receives OIDC
-`id-token: write`; both publication jobs use the `pypi` environment. No package
-API token or hidden enable variable is required. This configures future release
-automation; no initial PyPI release is assumed. [Source provenance](PROVENANCE.md)
-records the original repository and benchmark evidence.
+PyPI trusted publisher identity remains owner `LedFx`, repository `ledfx-senders`,
+workflow `ci.yml`, environment `pypi`. OIDC `id-token: write` is scoped to that
+caller job; the shared composite does not move publication into another workflow.
+The scoped automation App token permits GitHub contents/attestation writes.
+No package API token or hidden enable variable is required.
+
+Matching partial uploads can resume from the original run after SHA-256 checks;
+conflicts, missing drafts and unexpected assets fail without clobber or fallback
+release creation. Higher stable drafts/public releases block latest promotion;
+an abandoned newer draft can delay latest while older version publication remains
+possible. Retained snapshots and attestation bundles support inspection/retry.
+Use the [shared recovery guide](https://github.com/LedFx/release-ci#failure-and-recovery)
+and rerun failed jobs from the original run rather than rebuilding a version.
+This migration does not retroactively attest earlier releases.
+[Source provenance](PROVENANCE.md) records the original repository and benchmark
+evidence.
 
 macOS wheel deployment targets account for both Rust and Python: Intel starts at
 10.12 for CPython 3.11, 10.13 for 3.12–3.13, and 10.15 for 3.14+; ARM64 starts at
