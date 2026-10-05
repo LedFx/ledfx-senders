@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/LedFx/ledfx-senders/compare/v0.3.0...v0.3.1) (2026-10-05)
+
+
+### Bug Fixes
+
+* publish through the draft-aware release action ([#10](https://github.com/LedFx/ledfx-senders/issues/10)) ([346a3dd](https://github.com/LedFx/ledfx-senders/commit/346a3dd896baa7090e0187c320a5562383759211))
+
 ## [0.3.0](https://github.com/LedFx/ledfx-senders/compare/v0.2.0...v0.3.0) (2026-10-05)
 
 
