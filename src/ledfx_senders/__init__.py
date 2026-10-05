@@ -1,6 +1,6 @@
 """Native packet senders for Python applications."""
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 from ledfx_senders.artnet import ArtNetSender
 from ledfx_senders.ddp import DDPSender
