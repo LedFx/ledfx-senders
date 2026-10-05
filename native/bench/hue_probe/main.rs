@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 fn unhex(input: &str) -> Result<Vec<u8>, HueError> {
-    if input.len() % 2 != 0 {
+    if !input.len().is_multiple_of(2) {
         return Err(HueError::Configuration("invalid probe argument"));
     }
     input
