@@ -416,3 +416,7 @@ Wheel support is maintained in `[tool.cibuildwheel]`; platform rows live in
 `[[tool.release-ci.targets]]` in `pyproject.toml`. Update the single `wheel-build`
 cibuildwheel dependency pin and `uv.lock` together. Planning and builds use that
 locked tool and configuration; publication rejects missing platform coverage.
+
+PyPI publication copies verified distributions into a fresh `pypi-dist/` after
+`check-upload` succeeds. The uploader's `.publish.attestation` files stay in that
+copy; GitHub attestations and all shared release phases retain the frozen `dist/`.
