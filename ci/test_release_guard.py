@@ -1,7 +1,6 @@
 """Release permissions depend on the event, exact tag and synchronized versions."""
 
 import json
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -66,96 +65,3 @@ def test_version_drift_prevents_builds(repository: Path, name: str) -> None:
     path.write_text(path.read_text().replace("0.1.0", "0.2.0"))
     with pytest.raises(ValueError, match="version"):
         release_plan(repository, "push", "LedFx/ledfx-senders", "refs/heads/main")
-
-
-@pytest.fixture
-def git_repository(repository: Path) -> Path:
-    subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
-    subprocess.run(["git", "add", "."], cwd=repository, check=True)
-    subprocess.run(
-        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base"],
-        cwd=repository,
-        check=True,
-    )
-    return repository
-
-
-def commit(repository: Path, *names: str) -> None:
-    for name in names:
-        path = repository / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists():
-            path.write_text(path.read_text().replace("0.1.0", "0.2.0"))
-        else:
-            path.write_text("new in bump commit\n")
-    subprocess.run(["git", "add", "."], cwd=repository, check=True)
-    subprocess.run(
-        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "bump"],
-        cwd=repository,
-        check=True,
-    )
-
-
-@pytest.mark.parametrize(
-    ("files", "expected"),
-    [
-        (("CHANGELOG.md", ".release-please-manifest.json"), True),
-        (("src/ledfx_senders/__init__.py", "CHANGELOG.md"), True),
-        (("pyproject.toml", "uv.lock", "native/Cargo.lock"), True),
-        (("pyproject.toml", "tests/test_new.py"), False),
-        (("native/src/hue/mod.rs",), False),
-    ],
-)
-def test_metadata_only_change_detection(
-    git_repository: Path, files: tuple[str, ...], expected: bool
-) -> None:
-    commit(git_repository, *files)
-    from ci.release_guard import metadata_only, version_only_change
-
-    assert version_only_change(git_repository, "push", "refs/heads/main") is expected
-    assert metadata_only(files) is (
-        set(files)
-        <= {
-            "CHANGELOG.md",
-            ".release-please-manifest.json",
-            "src/ledfx_senders/__init__.py",
-        }
-    )
-
-
-def test_lock_maintenance_is_not_version_only(git_repository: Path) -> None:
-    # A renovate lock bump rewrites other packages' versions and hashes.
-    lock = git_repository / "uv.lock"
-    text = lock.read_text()
-    lock.write_text(
-        text.replace(
-            '[[package]]\nname = "ledfx-senders"', '[[package]]\nname = "ledfx-senders"'
-        )
-        + '\n[[package]]\nname = "example-dep"\nversion = "9.9.9"\n'
-    )
-    subprocess.run(["git", "add", "."], cwd=git_repository, check=True)
-    subprocess.run(
-        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "lock"],
-        cwd=git_repository,
-        check=True,
-    )
-    from ci.release_guard import version_only_change
-
-    assert version_only_change(git_repository, "push", "refs/heads/main") is False
-
-
-def test_version_only_never_applies_to_tags_or_dispatch(git_repository: Path) -> None:
-    commit(git_repository, "CHANGELOG.md")
-    from ci.release_guard import version_only_change
-
-    assert version_only_change(git_repository, "push", "refs/tags/v0.2.0") is False
-    assert (
-        version_only_change(git_repository, "workflow_dispatch", "refs/heads/main")
-        is False
-    )
-
-
-def test_version_only_fails_open_without_git_history(repository: Path) -> None:
-    from ci.release_guard import version_only_change
-
-    assert version_only_change(repository, "push", "refs/heads/main") is False

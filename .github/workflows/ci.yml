@@ -25,7 +25,7 @@ jobs:
     outputs:
       release: ${{ steps.plan.outputs.release }}
       version: ${{ steps.plan.outputs.version }}
-      version_only: ${{ steps.plan.outputs.version_only }}
+      version_only: ${{ steps.version_scope.outputs.version-only }}
       matrix: ${{ steps.wheels.outputs.matrix }}
       wheel-plan: ${{ steps.wheels.outputs.wheel-plan }}
     steps:
@@ -33,7 +33,7 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          # version_only_change diffs against origin/main (PRs) or HEAD^:
+          # version-scope diffs against origin/main (PRs) or HEAD^:
           # merge refs carry no parents without full history.
           fetch-depth: 0
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
@@ -45,6 +45,15 @@ jobs:
         uses: LedFx/release-ci/actions/plan@442e00705d4e5edd589021851e756761363f9d84 # v0.3.1
         with:
           source-sha: ${{ github.event.pull_request.head.sha || github.sha }}
+      - id: version_scope
+        uses: LedFx/release-ci/actions/version-scope@442e00705d4e5edd589021851e756761363f9d84 # v0.3.1
+        with:
+          package-name: ledfx-senders
+          versioned-manifests: |
+            pyproject.toml
+            uv.lock
+            native/Cargo.toml
+            native/Cargo.lock
 
   lint:
     name: Lint and workflow security

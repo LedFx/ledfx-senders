@@ -4,31 +4,9 @@ import ast
 import json
 import os
 import re
-import subprocess
 import tomllib
-from collections.abc import Iterable
 from pathlib import Path
 from typing import cast
-
-# Files whose change can never alter built artifacts on their own: release
-# prose and the package's own __version__ literal.
-PROSE_METADATA = frozenset(
-    {
-        "CHANGELOG.md",
-        ".release-please-manifest.json",
-        "src/ledfx_senders/__init__.py",
-    }
-)
-# pyproject.toml, native/Cargo.toml and both lock files also carry dependency
-# data, so they count as metadata only when their diff touches nothing but the
-# package's own version declarations. Anything else (a renovate bump, lock
-# maintenance) leaves other lines behind and runs the full matrix.
-VERSIONED_MANIFESTS = (
-    "pyproject.toml",
-    "native/Cargo.toml",
-    "uv.lock",
-    "native/Cargo.lock",
-)
 
 
 def table(value: object) -> dict[str, object]:
@@ -101,89 +79,6 @@ def release_plan(root: Path, event: str, repository: str, ref: str) -> tuple[str
     return version, publish
 
 
-def metadata_only(changed: Iterable[str]) -> bool:
-    """True when every changed path is prose a rebuild cannot alter."""
-    paths = set(changed)
-    return bool(paths) and paths <= PROSE_METADATA
-
-
-def manifest_diff(root: Path, name: str, base: str) -> str:
-    try:
-        return subprocess.run(
-            ["git", "diff", "--unified=0", base, "HEAD", "--", name],
-            cwd=root,
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
-        return ""
-
-
-def own_version_hunks_only(patch: str) -> bool:
-    """True when every hunk rewrites the package's own version declarations.
-
-    Each hunk must both touch only `version` values and sit inside the
-    package's own table — identified by the hunk's trailing function context
-    (git appends it after the range) or the nearest preceding context line.
-    A renovate dependency bump lands in a different package's table and
-    fails the anchor check.
-    """
-    if not patch:
-        return False
-    for hunk in re.split(r"^@@", patch, flags=re.MULTILINE)[1:]:
-        lines = hunk.splitlines()
-        # "--unified=0" hunks carry the enclosing line as section heading:
-        # "@@ -3 +3 @@ name=\"ledfx-senders\"" — that is the anchor.
-        anchor = (
-            lines[0].split(maxsplit=3)[3].lstrip()
-            if len(lines[0].split(maxsplit=3)) > 3
-            else ""
-        )
-        changed: list[str] = []
-        for line in lines[1:]:
-            body = line[1:].lstrip()
-            if line[:1] in {"+", "-"}:
-                changed.append(body)
-            elif body.startswith(("name = ", "[package]", "[project]")):
-                anchor = body
-        if not changed or not all(c.startswith("version") for c in changed):
-            return False
-        compact = anchor.replace(" ", "")
-        if not compact.startswith(('name="ledfx-senders"', "[package]", "[project]")):
-            return False
-    return True
-
-
-def version_only_change(root: Path, event: str, ref: str) -> bool:
-    """True when the whole diff is release metadata a rebuild cannot alter."""
-    if event not in {"pull_request", "push"} or ref.startswith("refs/tags/"):
-        return False
-    # Plan checks out full history: PR merge refs carry no parents otherwise.
-    base = "origin/main...HEAD" if event == "pull_request" else "HEAD^"
-    try:
-        listed = subprocess.run(
-            ["git", "diff", "--name-only", base, "HEAD"],
-            cwd=root,
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        ).stdout.split()
-    except (OSError, subprocess.SubprocessError):
-        return False  # Unknown history must not silently skip validation.
-    if not listed:
-        return False
-    manifests = [name for name in listed if name in VERSIONED_MANIFESTS]
-    rest = set(listed) - set(manifests)
-    if rest and not metadata_only(rest):
-        return False
-    return all(
-        own_version_hunks_only(manifest_diff(root, name, base)) for name in manifests
-    )
-
-
 def main() -> None:
     root = Path(__file__).resolve().parents[1]
     event = os.environ.get("GITHUB_EVENT_NAME", "")
@@ -193,11 +88,7 @@ def main() -> None:
         os.environ.get("GITHUB_REPOSITORY", ""),
         os.environ.get("GITHUB_REF", ""),
     )
-    values = (
-        f"version={version}\n"
-        f"release={str(publish).lower()}\n"
-        f"version_only={str(version_only_change(root, event, os.environ.get('GITHUB_REF', ''))).lower()}\n"
-    )
+    values = f"version={version}\nrelease={str(publish).lower()}\n"
     print(values, end="")
     if output := os.environ.get("GITHUB_OUTPUT"):
         with Path(output).open("a") as handle:
