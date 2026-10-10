@@ -4,9 +4,26 @@ import ast
 import json
 import os
 import re
+import subprocess
 import tomllib
+from collections.abc import Iterable
 from pathlib import Path
 from typing import cast
+
+# Every path release-please or a dependency lock bump may rewrite. A change
+# set entirely inside these files cannot alter built artifacts, so the heavy
+# native jobs skip it on pull_request and main pushes. Tags always build.
+RELEASE_METADATA = frozenset(
+    {
+        "CHANGELOG.md",
+        ".release-please-manifest.json",
+        "pyproject.toml",
+        "src/ledfx_senders/__init__.py",
+        "uv.lock",
+        "native/Cargo.toml",
+        "native/Cargo.lock",
+    }
+)
 
 
 def table(value: object) -> dict[str, object]:
@@ -79,14 +96,46 @@ def release_plan(root: Path, event: str, repository: str, ref: str) -> tuple[str
     return version, publish
 
 
+def metadata_only(changed: Iterable[str]) -> bool:
+    """True when every changed path is release metadata rebuilds cannot alter."""
+    paths = set(changed)
+    return bool(paths) and paths <= RELEASE_METADATA
+
+
+def version_only_change(root: Path, event: str, ref: str) -> bool:
+    """True when the whole diff is release metadata a rebuild cannot alter."""
+    if event not in {"pull_request", "push"} or ref.startswith("refs/tags/"):
+        return False
+    # Plan checks out full history: PR merge refs carry no parents otherwise.
+    base = "origin/main...HEAD" if event == "pull_request" else "HEAD^"
+    try:
+        listed = subprocess.run(
+            ["git", "diff", "--name-only", base, "HEAD"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        ).stdout.split()
+    except (OSError, subprocess.SubprocessError):
+        return False  # Unknown history must not silently skip validation.
+    return metadata_only(listed)
+
+
 def main() -> None:
+    root = Path(__file__).resolve().parents[1]
+    event = os.environ.get("GITHUB_EVENT_NAME", "")
     version, publish = release_plan(
-        Path(__file__).resolve().parents[1],
-        os.environ.get("GITHUB_EVENT_NAME", ""),
+        root,
+        event,
         os.environ.get("GITHUB_REPOSITORY", ""),
         os.environ.get("GITHUB_REF", ""),
     )
-    values = f"version={version}\nrelease={str(publish).lower()}\n"
+    values = (
+        f"version={version}\n"
+        f"release={str(publish).lower()}\n"
+        f"version_only={str(version_only_change(root, event, os.environ.get('GITHUB_REF', ''))).lower()}\n"
+    )
     print(values, end="")
     if output := os.environ.get("GITHUB_OUTPUT"):
         with Path(output).open("a") as handle:
