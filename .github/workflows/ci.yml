@@ -46,7 +46,7 @@ jobs:
         with:
           source-sha: ${{ github.event.pull_request.head.sha || github.sha }}
       - id: version_scope
-        uses: LedFx/release-ci/actions/version-scope@b7cd7375d72b5f87c20eb0673a9f0ce6ccb930f4 # v0.4.1
+        uses: LedFx/release-ci/actions/version-scope@12ea4ced7288cb6b0f3a8aafbac3e825969c17ca # v0.4.2
         with:
           package-name: ledfx-senders
           versioned-manifests: |
