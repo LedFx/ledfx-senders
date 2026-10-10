@@ -435,7 +435,11 @@ def test_all_256_unique_channels_are_representable(oracle: StrictOracle) -> None
         sender.connect()
         sender.send(frame)
         packet = oracle.receive(1844, 2)
+        # Every channel record must stay in configured order; a permutation or
+        # offset would still satisfy the length and suffix checks below.
         assert packet == encode_hue(frame, UUID, ids, 0)
+        assert packet[16:52] == UUID.encode()
+        assert packet[52] == 0 and packet[52 + 7 * 255] == 255
         assert packet[-7:] == b"\xff\1\1\2\2\3\3"
     finally:
         sender.close()
