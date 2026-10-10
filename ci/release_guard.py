@@ -80,9 +80,11 @@ def release_plan(root: Path, event: str, repository: str, ref: str) -> tuple[str
 
 
 def main() -> None:
+    root = Path(__file__).resolve().parents[1]
+    event = os.environ.get("GITHUB_EVENT_NAME", "")
     version, publish = release_plan(
-        Path(__file__).resolve().parents[1],
-        os.environ.get("GITHUB_EVENT_NAME", ""),
+        root,
+        event,
         os.environ.get("GITHUB_REPOSITORY", ""),
         os.environ.get("GITHUB_REF", ""),
     )
