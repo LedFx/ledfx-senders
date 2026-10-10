@@ -56,3 +56,17 @@ def test_installed_distribution_includes_public_typing() -> None:
     package = files("ledfx_senders")
     assert package.joinpath("py.typed").is_file()
     assert package.joinpath("_native.pyi").is_file()
+
+
+def test_installed_hue_api_and_typing_probe() -> None:
+    from pathlib import Path
+
+    from ledfx_senders import HueSender
+    from ledfx_senders.hue import HueSender as Canonical
+
+    assert HueSender is Canonical
+    package = files("ledfx_senders")
+    assert package.joinpath("hue.py").is_file()
+    assert "class HueEngine:" in package.joinpath("_native.pyi").read_text()
+    probe = Path(__file__).resolve().parents[1] / "ci/hue_typing_probe.py"
+    subprocess.run([sys.executable, "-I", str(probe)], check=True, timeout=15)

@@ -306,12 +306,18 @@ fn pack_hue(rgb: &[u8], count: usize, identifier: &[u8], ids: &[u8], sequence: u
     out.extend_from_slice(b"HueStream");
     out.extend_from_slice(&[2, 0, sequence, 0, 0, 0, 0]);
     out.extend_from_slice(identifier);
-    for (pixel, id) in rgb.chunks_exact(3).zip(ids.iter().copied()) {
-        out.extend_from_slice(&[
-            id, pixel[0], pixel[0], pixel[1], pixel[1], pixel[2], pixel[2],
-        ]);
+    for id in ids {
+        out.extend_from_slice(&[*id, 0, 0, 0, 0, 0, 0]);
     }
+    fill_hue_rgb(&mut out, rgb);
     out
+}
+
+/// Fill only RGB slots in an already validated HueStream template.
+pub(crate) fn fill_hue_rgb(out: &mut [u8], rgb: &[u8]) {
+    for (channel, pixel) in out[52..].chunks_exact_mut(7).zip(rgb.chunks_exact(3)) {
+        channel[1..].copy_from_slice(&[pixel[0], pixel[0], pixel[1], pixel[1], pixel[2], pixel[2]]);
+    }
 }
 
 fn pack_govee(rgb: &[u8], count: usize, stretch: bool) -> Vec<u8> {

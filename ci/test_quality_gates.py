@@ -89,3 +89,29 @@ def test_case_and_receiver_json_validate_consumed_fields() -> None:
         4,
         5,
     ]
+
+
+def test_oracle_builder_reports_linked_openssl(tmp_path: Path) -> None:
+    import os
+
+    prefix = os.environ.get("HUE_OPENSSL_PREFIX")
+    output = tmp_path / ("oracle.exe" if sys.platform == "win32" else "oracle")
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "ci/build_hue_oracle.py"),
+            "--output",
+            str(output),
+            *(["--openssl-prefix", prefix] if prefix is not None else []),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    assert output.is_file()
+    metadata = json.loads(result.stdout.splitlines()[-1])
+    assert metadata["executable"] == str(output)
+    assert metadata["build_version"].startswith("OpenSSL 3.")
+    assert metadata["runtime_version"].startswith("OpenSSL 3.")

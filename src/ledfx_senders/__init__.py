@@ -6,6 +6,7 @@ from ledfx_senders.artnet import ArtNetSender
 from ledfx_senders.ddp import DDPSender
 from ledfx_senders.e131 import E131Sender
 from ledfx_senders.frames import Frame
+from ledfx_senders.hue import HueSender
 from ledfx_senders.nanoleaf import NanoleafSender
 from ledfx_senders.opc import OPCSender
 from ledfx_senders.osc import OSCSender
@@ -16,6 +17,7 @@ __all__ = [
     "DDPSender",
     "E131Sender",
     "Frame",
+    "HueSender",
     "NanoleafSender",
     "OPCSender",
     "OSCSender",

@@ -35,6 +35,10 @@ excludes = ["native/target/**", "**/__pycache__/**", "**/.pytest_cache/**"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 norecursedirs = [".*", "dist", "build", "native"]
+markers = [
+    "native_probe: Cargo-only development probe (excluded from installed-wheel tests)",
+    "hue_oracle: mandatory independent OpenSSL interoperability (local opt-out must be explicit)",
+]
 
 [tool.cibuildwheel]
 build = "cp3{11,12,13,14,15}-* cp3{14,15}t-*"
@@ -46,7 +50,9 @@ enable = ["cpython-prerelease"]
 # Exact pins avoid cmd.exe interpreting range operators in cibuildwheel's
 # Windows shell=True pip invocation. Keep aligned with the tested dev lock.
 test-requires = ["pytest==9.1.1", "hypothesis==6.168.0"]
-test-command = "python -I {project}/ci/native_wheel_smoke.py && python -I -m pytest --noconftest {project}/tests -q"
+# OpenSSL/Cargo cases run in the mandatory source gate and all 35 host runtime
+# cells, where OpenSSL 3 development tooling is separate from wheel repair.
+test-command = 'python -I {project}/ci/native_wheel_smoke.py && python -I {project}/ci/hue_wheel_smoke.py && python -I -m pytest --noconftest {project}/tests -m "not native_probe and not hue_oracle" -q'
 
 [tool.cibuildwheel.linux]
 manylinux-x86_64-image = "quay.io/pypa/manylinux_2_28_x86_64@sha256:39df0042d5cc900b085aa25a0659368b42a0006c54c474299b785b44c1b4ff82"

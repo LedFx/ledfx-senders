@@ -31,6 +31,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: false
@@ -38,6 +39,8 @@ jobs:
         run: uv run --no-project --python 3.12 python ci/release_guard.py
       - id: wheels
         uses: LedFx/release-ci/actions/plan@442e00705d4e5edd589021851e756761363f9d84 # v0.3.1
+        with:
+          source-sha: ${{ github.event.pull_request.head.sha || github.sha }}
 
   lint:
     name: Lint and workflow security
@@ -48,6 +51,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: false
@@ -64,6 +68,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: false
@@ -78,6 +83,14 @@ jobs:
           export PYO3_PYTHON
           cargo fmt --check
           cargo clippy --locked --all-targets -- -D warnings
+          cargo tree --locked -e features > "$RUNNER_TEMP/hue-provider-features.txt"
+          cat "$RUNNER_TEMP/hue-provider-features.txt"
+          if grep -Ei 'aws-lc|mbedtls|openssl|crypto-openssl|crypto-aws-lc' "$RUNNER_TEMP/hue-provider-features.txt"; then
+            exit 1
+          fi
+          grep -F 'rtc-dtls feature "crypto-ring"' "$RUNNER_TEMP/hue-provider-features.txt"
+          grep -F 'rtc-crypto feature "crypto-ring"' "$RUNNER_TEMP/hue-provider-features.txt"
+          grep -F 'ring v0.17.14' "$RUNNER_TEMP/hue-provider-features.txt"
           # Keep the burst wire contract isolated from CPU-heavy SIMD tests.
           # Its packet assertions and intentional in-test concurrency stay intact.
           cargo test --locked --lib -- --skip transport::tests::real_socket_backends_preserve_batch_payloads
@@ -85,6 +98,34 @@ jobs:
           cargo test --locked --bin ledfx-receiver
           cargo build --locked --release --bin ledfx-receiver
           "$PYO3_PYTHON" bench/receiver/test_receiver.py
+
+  native-hue-interop:
+    name: Mandatory native Hue and strict OpenSSL oracle
+    needs: [lint, native-kernel]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: false
+      - name: Supply independent test toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev openssl
+          rustup toolchain install 1.94.0 --profile minimal
+          uv sync --frozen --group dev
+          # Match run_probe's debug profile and Python before any oracle watchdog.
+          PYO3_PYTHON="$(uv run --frozen --group dev python -c 'import sys; print(sys.executable)')"
+          export PYO3_PYTHON
+          echo "PYO3_PYTHON=$PYO3_PYTHON" >> "$GITHUB_ENV"
+          cargo build --manifest-path native/Cargo.toml --locked --example hue-probe
+          uv run --frozen --only-group dev python ci/build_hue_oracle.py --output "$RUNNER_TEMP/hue-oracle" --github-env "$GITHUB_ENV"
+      - name: Require native probe and public strict-oracle contracts
+        run: uv run --frozen --group dev python -m pytest tests/test_hue_interop.py tests/test_hue_sender.py -q -rs
 
   native-wheels:
     name: Sender library wheels (${{ matrix.target }})
@@ -101,6 +142,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: false
@@ -117,10 +159,26 @@ jobs:
           uv run --frozen --only-group wheel-build python -m cibuildwheel .
           --config-file pyproject.toml --platform "$PLATFORM" --archs "$ARCH"
           --output-dir wheelhouse
+      - name: Audit repaired wheel provider linkage and record immutable identity
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            uv run --no-project --python 3.12 --with auditwheel==6.7.0 python ci/audit_native_wheels.py wheelhouse
+          elif [[ "$RUNNER_OS" == macOS ]]; then
+            uv run --no-project --python 3.12 --with delocate==0.13.0 python ci/audit_native_wheels.py wheelhouse
+          else
+            uv run --no-project --python 3.12 python ci/audit_native_wheels.py wheelhouse
+          fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sender-wheel-${{ matrix.target }}
           path: wheelhouse/*.whl
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sender-audit-${{ matrix.target }}
+          path: wheelhouse/native-wheel-audit.json
           if-no-files-found: error
 
   native-wheel-runtime:
@@ -153,6 +211,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: false
@@ -160,6 +219,20 @@ jobs:
         with:
           name: sender-wheel-${{ matrix.target }}
           path: wheelhouse
+      - name: Supply Linux independent OpenSSL test headers
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev openssl
+      - name: Supply macOS OpenSSL 3 test tooling
+        if: runner.os == 'macOS'
+        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install openssl@3
+      - name: Windows oracle command startup regressions
+        if: runner.os == 'Windows'
+        run: uv run --no-project --python 3.12 python -m unittest ci.test_hue_windows_tools -v
+      - name: Build independent platform oracle and record OpenSSL versions
+        shell: bash
+        run: uv run --no-project --python 3.12 python ci/build_hue_oracle.py --output "$RUNNER_TEMP/hue-oracle" --github-env "$GITHUB_ENV"
       # No Rust installation or project sync: test the shipped binary itself.
       - name: Install selected sender wheel and its dependencies
         working-directory: ${{ runner.temp }}
@@ -167,6 +240,14 @@ jobs:
           uv venv --python "$PYTHON_VERSION" "$RUNNER_TEMP/sender-wheel-venv"
           uv pip install --python "$RUNNER_TEMP/sender-wheel-venv" pytest hypothesis numpy
           uv pip install --python "$RUNNER_TEMP/sender-wheel-venv" --no-index --find-links "$GITHUB_WORKSPACE/wheelhouse" ledfx-senders
+      - name: Strict typing against installed wheel only
+        if: matrix.target == 'linux-x86_64' && matrix.python == '3.12'
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir hue-installed-types
+          cp "$GITHUB_WORKSPACE/ci/hue_typing_probe.py" hue-installed-types/
+          printf 'preset = "strict"\nproject-includes = ["hue_typing_probe.py"]\nsearch-path = []\n' > hue-installed-types/pyrefly.toml
+          uv run --project "$GITHUB_WORKSPACE" --frozen --only-group dev pyrefly check --config "$RUNNER_TEMP/hue-installed-types/pyrefly.toml" --python-interpreter-path "$RUNNER_TEMP/sender-wheel-venv/bin/python"
       - name: Native socket, buffer, control and cleanup smoke
         if: runner.os != 'Windows'
         working-directory: ${{ runner.temp }}
@@ -175,9 +256,11 @@ jobs:
             export LEDFX_REQUIRE_FREE_THREADING=1
           fi
           "$RUNNER_TEMP/sender-wheel-venv/bin/python" -I "$GITHUB_WORKSPACE/ci/native_wheel_smoke.py"
-          "$RUNNER_TEMP/sender-wheel-venv/bin/python" -I -m pytest --noconftest "$GITHUB_WORKSPACE/tests" -q
+          "$RUNNER_TEMP/sender-wheel-venv/bin/python" -I "$GITHUB_WORKSPACE/ci/hue_wheel_smoke.py"
+          "$RUNNER_TEMP/sender-wheel-venv/bin/python" -I -m pytest --noconftest "$GITHUB_WORKSPACE/tests" -m "not native_probe" -q -rs
           if [[ "$PYTHON_VERSION" == *t ]]; then
             PYTHON_GIL=0 "$RUNNER_TEMP/sender-wheel-venv/bin/python" -I -X gil=0 "$GITHUB_WORKSPACE/ci/native_wheel_smoke.py"
+            PYTHON_GIL=0 "$RUNNER_TEMP/sender-wheel-venv/bin/python" -I -X gil=0 "$GITHUB_WORKSPACE/ci/hue_wheel_smoke.py"
           fi
       - name: Native socket, buffer, control and cleanup smoke (PowerShell)
         if: runner.os == 'Windows'
@@ -186,15 +269,20 @@ jobs:
         run: |
           $python = Join-Path $env:RUNNER_TEMP 'sender-wheel-venv/Scripts/python.exe'
           $smoke = Join-Path $env:GITHUB_WORKSPACE 'ci/native_wheel_smoke.py'
+          $hueSmoke = Join-Path $env:GITHUB_WORKSPACE 'ci/hue_wheel_smoke.py'
           $tests = Join-Path $env:GITHUB_WORKSPACE 'tests'
           if ($env:PYTHON_VERSION.EndsWith('t')) { $env:LEDFX_REQUIRE_FREE_THREADING = '1' }
           & $python -I $smoke
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & $python -I -m pytest --noconftest $tests -q
+          & $python -I $hueSmoke
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $python -I -m pytest --noconftest $tests -m 'not native_probe' -q -rs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if ($env:PYTHON_VERSION.EndsWith('t')) {
             $env:PYTHON_GIL = '0'
             & $python -I -X gil=0 $smoke
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & $python -I -X gil=0 $hueSmoke
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 
@@ -207,11 +295,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: false
       - name: Build one self-contained sender source distribution
-        run: uv build --sdist --out-dir sender-dist
+        run: |
+          uv build --sdist --out-dir sender-dist
+          LEDFX_SDIST="$(find sender-dist -name '*.tar.gz' -print -quit)" uv run --frozen --only-group dev python -m pytest ci/test_sdist_content.py -q
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: sender-wheel-*
@@ -229,6 +320,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sender-dist
@@ -238,19 +333,24 @@ jobs:
           enable-cache: false
       - name: Build and test outside any source checkout
         run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev openssl
           rustup toolchain install 1.94.0 --profile minimal
           uv venv --python 3.12 "$RUNNER_TEMP/source-venv"
           uv pip install --python "$RUNNER_TEMP/source-venv" dist/*.tar.gz pytest hypothesis
           mkdir "$RUNNER_TEMP/source-tests"
           tar -xzf dist/*.tar.gz -C "$RUNNER_TEMP/source-tests" --strip-components=1
+          uv run --no-project --python 3.12 python "$RUNNER_TEMP/source-tests/ci/build_hue_oracle.py" --output "$RUNNER_TEMP/hue-oracle" --github-env "$GITHUB_ENV"
+          export HUE_ORACLE="$RUNNER_TEMP/hue-oracle" LEDFX_REQUIRE_HUE_INTEROP=1
           cd "$RUNNER_TEMP"
           source-venv/bin/python -I source-tests/ci/native_wheel_smoke.py
-          source-venv/bin/python -I -m pytest --noconftest source-tests/tests -q
+          source-venv/bin/python -I source-tests/ci/hue_wheel_smoke.py
+          source-venv/bin/python -I -m pytest --noconftest source-tests/tests -m "not native_probe" -q -rs
 
   ci-passed:
     name: CI passed
     if: always()
-    needs: [plan, lint, native-kernel, native-wheels, native-wheel-runtime, sender-package, source-install]
+    needs: [plan, lint, native-kernel, native-hue-interop, native-wheels, native-wheel-runtime, sender-package, source-install]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -282,6 +382,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           sparse-checkout: |
             .github
             pyproject.toml
