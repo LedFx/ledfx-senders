@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/LedFx/ledfx-senders/compare/v0.3.1...v0.4.0) (2026-10-10)
+
+
+### Features
+
+* **hue:** add bounded native DTLS sender ([#14](https://github.com/LedFx/ledfx-senders/issues/14)) ([0c04641](https://github.com/LedFx/ledfx-senders/commit/0c04641ff400c72b52651d62de99187e434f5e1f))
+
+
+### Bug Fixes
+
+* isolate PyPI upload sidecars from verified distributions ([#12](https://github.com/LedFx/ledfx-senders/issues/12)) ([aab94ed](https://github.com/LedFx/ledfx-senders/commit/aab94edd112aacb26807ee851e855445156ade23))
+
 ## [0.3.1](https://github.com/LedFx/ledfx-senders/compare/v0.3.0...v0.3.1) (2026-10-05)
 
 
