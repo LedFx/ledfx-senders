@@ -100,10 +100,10 @@ def commit(repository: Path, *names: str) -> None:
     ("files", "expected"),
     [
         (("CHANGELOG.md", ".release-please-manifest.json"), True),
+        (("src/ledfx_senders/__init__.py", "CHANGELOG.md"), True),
         (("pyproject.toml", "uv.lock", "native/Cargo.lock"), True),
         (("pyproject.toml", "tests/test_new.py"), False),
         (("native/src/hue/mod.rs",), False),
-        (("src/ledfx_senders/__init__.py", "CHANGELOG.md"), True),
     ],
 )
 def test_metadata_only_change_detection(
@@ -113,7 +113,35 @@ def test_metadata_only_change_detection(
     from ci.release_guard import metadata_only, version_only_change
 
     assert version_only_change(git_repository, "push", "refs/heads/main") is expected
-    assert metadata_only(files) is expected
+    assert metadata_only(files) is (
+        set(files)
+        <= {
+            "CHANGELOG.md",
+            ".release-please-manifest.json",
+            "src/ledfx_senders/__init__.py",
+        }
+    )
+
+
+def test_lock_maintenance_is_not_version_only(git_repository: Path) -> None:
+    # A renovate lock bump rewrites other packages' versions and hashes.
+    lock = git_repository / "uv.lock"
+    text = lock.read_text()
+    lock.write_text(
+        text.replace(
+            '[[package]]\nname = "ledfx-senders"', '[[package]]\nname = "ledfx-senders"'
+        )
+        + '\n[[package]]\nname = "example-dep"\nversion = "9.9.9"\n'
+    )
+    subprocess.run(["git", "add", "."], cwd=git_repository, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "lock"],
+        cwd=git_repository,
+        check=True,
+    )
+    from ci.release_guard import version_only_change
+
+    assert version_only_change(git_repository, "push", "refs/heads/main") is False
 
 
 def test_version_only_never_applies_to_tags_or_dispatch(git_repository: Path) -> None:
