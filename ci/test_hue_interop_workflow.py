@@ -79,6 +79,10 @@ def test_native_oracle_prebuilds_debug_probe_before_protocols(tmp_path: Path) ->
         executable.chmod(0o755)
     github_env = tmp_path / "github-env"
     github_env.touch()
+    # Toolchain steps read the real pinned channel; stage it beside the replay.
+    (tmp_path / "rust-toolchain.toml").write_text(
+        (ROOT / "rust-toolchain.toml").read_text()
+    )
     environment = {
         **os.environ,
         "PATH": str(tools) + os.pathsep + os.environ["PATH"],

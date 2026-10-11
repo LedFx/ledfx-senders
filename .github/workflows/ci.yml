@@ -25,6 +25,7 @@ jobs:
     outputs:
       release: ${{ steps.plan.outputs.release }}
       version: ${{ steps.plan.outputs.version }}
+      version_only: ${{ steps.version_scope.outputs.version-only }}
       matrix: ${{ steps.wheels.outputs.matrix }}
       wheel-plan: ${{ steps.wheels.outputs.wheel-plan }}
     steps:
@@ -32,6 +33,9 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # version-scope diffs against origin/main (PRs) or HEAD^:
+          # merge refs carry no parents without full history.
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: false
@@ -41,6 +45,15 @@ jobs:
         uses: LedFx/release-ci/actions/plan@442e00705d4e5edd589021851e756761363f9d84 # v0.3.1
         with:
           source-sha: ${{ github.event.pull_request.head.sha || github.sha }}
+      - id: version_scope
+        uses: LedFx/release-ci/actions/version-scope@12ea4ced7288cb6b0f3a8aafbac3e825969c17ca # v0.4.2
+        with:
+          package-name: ledfx-senders
+          versioned-manifests: |
+            pyproject.toml
+            uv.lock
+            native/Cargo.toml
+            native/Cargo.lock
 
   lint:
     name: Lint and workflow security
@@ -61,7 +74,8 @@ jobs:
 
   native-kernel:
     name: Native Rust contracts
-    needs: [lint]
+    needs: [plan, lint]
+    if: needs.plan.outputs.version_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -74,7 +88,9 @@ jobs:
           enable-cache: false
       - name: Install native test toolchain
         run: |
-          rustup toolchain install 1.94.0 --profile minimal --component clippy --component rustfmt
+          CHANNEL="$(sed -n 's/^channel *= *\"\([^\"]*\)\".*/\1/p' rust-toolchain.toml)"
+          rustup toolchain install "$CHANNEL" --profile minimal --component clippy --component rustfmt
+          echo "RUSTUP_TOOLCHAIN=$CHANNEL" >> "$GITHUB_ENV"
           uv python install 3.12
       - name: Check formatting, lints and native contracts
         working-directory: native
@@ -116,7 +132,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libssl-dev openssl
-          rustup toolchain install 1.94.0 --profile minimal
+          CHANNEL="$(sed -n 's/^channel *= *\"\([^\"]*\)\".*/\1/p' rust-toolchain.toml)"
+          rustup toolchain install "$CHANNEL" --profile minimal
+          echo "RUSTUP_TOOLCHAIN=$CHANNEL" >> "$GITHUB_ENV"
           uv sync --frozen --group dev
           # Match run_probe's debug profile and Python before any oracle watchdog.
           PYO3_PYTHON="$(uv run --frozen --group dev python -c 'import sys; print(sys.executable)')"
@@ -129,7 +147,7 @@ jobs:
 
   native-wheels:
     name: Sender library wheels (${{ matrix.target }})
-    needs: [plan, lint]
+    needs: [plan, lint, native-kernel]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
@@ -148,7 +166,10 @@ jobs:
           enable-cache: false
       - name: Install host native toolchain
         if: runner.os != 'Linux'
-        run: rustup toolchain install 1.94.0 --profile minimal
+        run: |
+          CHANNEL="$(sed -n 's/^channel *= *\"\([^\"]*\)\".*/\1/p' rust-toolchain.toml)"
+          rustup toolchain install "$CHANNEL" --profile minimal
+          echo "RUSTUP_TOOLCHAIN=$CHANNEL" >> "$GITHUB_ENV"
       # Linux builds and auditwheel repair occur inside pinned manylinux images.
       # Windows/macOS repair runs with cibuildwheel's platform tools.
       - name: Build portable sender library wheels
@@ -288,7 +309,7 @@ jobs:
 
   sender-package:
     name: Assemble sender library distributions
-    needs: [lint, native-wheels]
+    needs: [lint, native-kernel, native-wheels]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -335,7 +356,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libssl-dev openssl
-          rustup toolchain install 1.94.0 --profile minimal
+          CHANNEL="$(sed -n 's/^channel *= *\"\([^\"]*\)\".*/\1/p' rust-toolchain.toml)"
+          rustup toolchain install "$CHANNEL" --profile minimal
+          export RUSTUP_TOOLCHAIN="$CHANNEL"
           uv venv --python 3.12 "$RUNNER_TEMP/source-venv"
           uv pip install --python "$RUNNER_TEMP/source-venv" dist/*.tar.gz pytest hypothesis
           mkdir "$RUNNER_TEMP/source-tests"
@@ -354,8 +377,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require every build and installed test to pass
-        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+      # Version-only changes legitimately skip the whole native matrix; their
+      # diff cannot alter built artifacts. Anything else must actually run.
+      - name: Require native coverage unless the diff is release metadata
+        if: needs.plan.outputs.version_only != 'true' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped'))
+        run: exit 1
+      - name: Require lint and plan even for metadata-only changes
+        if: contains(needs.lint.result, 'failure') || contains(needs.lint.result, 'cancelled') || contains(needs.plan.result, 'failure') || contains(needs.plan.result, 'cancelled')
         run: exit 1
 
 
