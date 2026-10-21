@@ -56,9 +56,13 @@ platform. Release configuration does not itself mean a release exists; check
 [PyPI](https://pypi.org/project/ledfx-senders/) for availability. Application
 repositories do not need Rust, a source checkout, or a build bootstrap script.
 
-The supported wheel targets are Linux x86-64 and AArch64 (glibc), Windows x86-64,
-and macOS Intel and ARM64. There are no Windows ARM64, 32-bit ARM/x86, or musl
-wheel targets. A wheel must match both the Python ABI and platform; free-threaded
+The supported wheel targets are Linux x86-64, AArch64 and ARMv7 (glibc), Windows
+x86-64, and macOS Intel and ARM64. The ARMv7 wheels (`manylinux_2_31_armv7l`)
+cover 32-bit Raspberry Pi OS on a Raspberry Pi 2 or newer, and 64-bit Raspberry
+Pi OS uses the AArch64 wheels. There are no Windows ARM64, ARMv6, 32-bit x86, or
+musl wheel targets. On ARMv6 (Raspberry Pi Zero and 1), pip can only use a wheel
+that [piwheels](https://www.piwheels.org/project/ledfx-senders/) has built for the
+system Python; otherwise it builds the sdist, which needs Rust. A wheel must match both the Python ABI and platform; free-threaded
 Python uses its separate `t` ABI. Wheels include `py.typed` and `_native.pyi` for
 type checkers, and installed-wheel tests check that both files are distributed.
 
@@ -86,9 +90,12 @@ tools, not installed public APIs; their measurements are not release gates.
 
 ## Repository automation
 
-The independent CI builds 35 portable wheel combinations: seven CPython variants
-(3.11–3.15, 3.14t and 3.15t) across Linux x86_64/ARM64, Windows AMD64, and macOS
-Intel/ARM64. Installed tests require the native engine, block LedFx imports and
+The independent CI builds 42 portable wheel combinations: seven CPython variants
+(3.11–3.15, 3.14t and 3.15t) across Linux x86_64/ARM64/ARMv7, Windows AMD64, and
+macOS Intel/ARM64. ARMv7 wheels build and run natively in 32-bit containers on
+the ARM64 runner. PyPI has no ARMv7 NumPy wheels, so every ARMv7 variant is
+installed with pip and loads its extension module, and Debian's Python 3.13 with
+its NumPy runs the native smoke checks and the installed test suite. Installed tests require the native engine, block LedFx imports and
 restrict network traffic to loopback. Free-threaded variants assert that NumPy
 and the binding leave the GIL disabled, including concurrent sender operations.
 The source distribution is rebuilt and tested outside a source checkout.
@@ -116,7 +123,7 @@ Release Please maintains Python, Rust and lockfile versions together on canonica
 and draft release. Merging its release PR is the release action: the tag push
 runs `.github/workflows/ci.yml`. An early guard requires the tag, project,
 Python package, Rust package, lockfiles and release manifest versions to agree.
-All five platform builds, 35 installed-wheel variants and source/native checks
+All six platform builds, 43 installed-wheel cells and source/native checks
 must pass before publishing the same run's `sender-dist` artifact to PyPI.
 One queued publication job calls the SHA-pinned
 [shared release transaction](https://github.com/LedFx/release-ci), using the exact
@@ -203,8 +210,7 @@ AArch64 uses measured policy/dtype choices: explicit NEON for DDP and E1.31
 float64, compiler-vectorized loops for E1.31/OPC float32, and a compiler-optimized
 OPC float64 loop with SIMD validation and scalar conversion.
 Runtime feature checks guard each specialized kernel. Other targets retain a
-portable scalar implementation; ARM32 is not a supported wheel target and has
-no promised SIMD float64 path. The compile-time policy specializations preserve DDP wrapping, E1.31 strict
+portable scalar implementation; ARMv7 wheels use it and have no SIMD float64 path. The compile-time policy specializations preserve DDP wrapping, E1.31 strict
 (-1,256) rejection, OPC clamp/truncate, nonfinite rejection and whole-frame atomicity. There is no public unchecked input option.
 
 `Manual SIMD validation and measurements` runs native kernel equivalence tests
@@ -477,9 +483,10 @@ copy; GitHub attestations and all shared release phases retain the frozen `dist/
 
 Hue release gates keep test OpenSSL tooling separate from production wheels.
 The Linux native gate runs Cargo probes against a strict independent fixture;
-all 35 installed interpreter/platform cells run public interoperability,
+all 35 host installed interpreter/platform cells run public interoperability,
 including decrypted vectors, strict identity, wrong keys and unsupported suites.
-Cibuildwheel's container checks select `not native_probe and not hue_oracle`;
+Cibuildwheel's container checks and the ARMv7 container cells select
+`not native_probe and not hue_oracle`;
 the required host runtime and source-install gates select `not native_probe`
 and supply the oracle. Missing required tooling fails. Developers can explicitly
 opt out locally with `pytest -m 'not native_probe and not hue_oracle'`.
