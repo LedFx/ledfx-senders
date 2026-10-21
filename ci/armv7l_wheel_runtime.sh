@@ -22,8 +22,10 @@ else
   /opt/uv/bin/uv venv --seed --python "$python_version" /opt/sender-venv
 fi
 python=/opt/sender-venv/bin/python
-"$python" -c 'import struct, sys; assert struct.calcsize("P") == 4, "not 32-bit"; print(sys.version)'
-# pip, as Raspberry Pi OS users run it, selects the manylinux armv7l wheel.
+"$python" -c 'import platform, struct, sys; assert struct.calcsize("P") == 4, "not 32-bit"; print(sys.version, platform.machine())'
+# pip, as Raspberry Pi OS users run it, selects the manylinux armv7l wheel. The
+# runner's kernel is AArch64, like 32-bit Raspberry Pi OS on its default 64-bit
+# kernel, so the machine name printed above can be aarch64 or armv8l.
 "$python" -m pip install -q --no-index --only-binary :all: --find-links "$src/wheelhouse" \
   "${deps[@]}" ledfx-senders
 "$python" -m pip list
