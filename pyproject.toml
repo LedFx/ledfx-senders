@@ -53,10 +53,14 @@ test-requires = ["pytest==9.1.1", "hypothesis==6.168.0"]
 # OpenSSL/Cargo cases run in the mandatory source gate and all 35 host runtime
 # cells, where OpenSSL 3 development tooling is separate from wheel repair.
 test-command = 'python -I {project}/ci/native_wheel_smoke.py && python -I {project}/ci/hue_wheel_smoke.py && python -I -m pytest --noconftest {project}/tests -m "not native_probe and not hue_oracle" -q'
+# PyPI has no armv7l NumPy wheels, so the container cannot install the test
+# dependencies without compiling NumPy. The armv7l runtime job tests instead.
+test-skip = "*-manylinux_armv7l"
 
 [tool.cibuildwheel.linux]
 manylinux-x86_64-image = "quay.io/pypa/manylinux_2_28_x86_64@sha256:39df0042d5cc900b085aa25a0659368b42a0006c54c474299b785b44c1b4ff82"
 manylinux-aarch64-image = "quay.io/pypa/manylinux_2_28_aarch64@sha256:f5f03dedf61b47d69d0742d36047db78adeee3bdb7a9910ff52304750ecf2514"
+manylinux-armv7l-image = "quay.io/pypa/manylinux_2_31_armv7l@sha256:3503ad3cef1b2a35ee05048eaebdb93ad1b4a6e9426af7f43dbe7658243ab0db"
 before-all = "bash {project}/ci/install-native-rust.sh"
 environment = { CARGO_TARGET_DIR = "/tmp/ledfx-native-target", CARGO_HOME = "/opt/ledfx-cargo", RUSTUP_HOME = "/opt/ledfx-rustup", PATH = "/opt/ledfx-cargo/bin:$PATH" }
 
@@ -95,6 +99,13 @@ platform = "linux"
 arch = "aarch64"
 runner = "ubuntu-24.04-arm"
 target = "linux-aarch64"
+
+# 32-bit Raspberry Pi OS (armhf). The AArch64 runner executes AArch32 natively.
+[[tool.release-ci.targets]]
+platform = "linux"
+arch = "armv7l"
+runner = "ubuntu-24.04-arm"
+target = "linux-armv7l"
 
 [[tool.release-ci.targets]]
 platform = "windows"
