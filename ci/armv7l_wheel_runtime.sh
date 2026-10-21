@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Runs inside a 32-bit Debian armhf container against the built armv7l wheels.
 # Usage: armv7l_wheel_runtime.sh <system | uv-managed Python version> <checkout>
-# "system" installs with Debian's Python 3.13 and NumPy and runs the test suite.
-# PyPI has no armv7l NumPy wheels, so other interpreters run the stdlib smokes.
+# "system" installs with Debian's Python 3.13 and NumPy and runs the smokes and
+# the test suite. PyPI has no armv7l NumPy wheels, so other interpreters install
+# the wheel without dependencies and load its extension module.
 set -euo pipefail
 python_version=$1
 src=$2
@@ -28,16 +29,32 @@ python=/opt/sender-venv/bin/python
 "$python" -m pip list
 
 cd /tmp
-if [[ "$python_version" == *t ]]; then
-  export LEDFX_REQUIRE_FREE_THREADING=1
+if [[ "$python_version" != system ]]; then
+  # The package imports NumPy, which has no wheel here: load the extension alone.
+  "$python" -I - <<'PY'
+import importlib.metadata
+import importlib.util
+import sys
+import sysconfig
+
+(native,) = [
+    f
+    for f in importlib.metadata.files("ledfx-senders") or ()
+    if f.name.startswith("_native.") and f.name.endswith(".so")
+]
+spec = importlib.util.spec_from_file_location("ledfx_senders._native", native.locate())
+assert spec and spec.loader
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+names = [n for n in dir(module) if not n.startswith("__")]
+assert names, "native module exports nothing"
+if sysconfig.get_config_var("Py_GIL_DISABLED"):
+    assert not sys._is_gil_enabled(), "loading the extension re-enabled the GIL"
+print(native.locate(), len(names), "exports")
+PY
+  exit 0
 fi
 "$python" -I "$src/ci/native_wheel_smoke.py"
 "$python" -I "$src/ci/hue_wheel_smoke.py"
-if [[ "$python_version" == *t ]]; then
-  PYTHON_GIL=0 "$python" -I -X gil=0 "$src/ci/native_wheel_smoke.py"
-  PYTHON_GIL=0 "$python" -I -X gil=0 "$src/ci/hue_wheel_smoke.py"
-fi
-if [[ "$python_version" == system ]]; then
-  "$python" -I -m pytest --noconftest -p no:cacheprovider "$src/tests" \
-    -m "not native_probe and not hue_oracle" -q -rs
-fi
+"$python" -I -m pytest --noconftest -p no:cacheprovider "$src/tests" \
+  -m "not native_probe and not hue_oracle" -q -rs
