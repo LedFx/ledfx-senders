@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/LedFx/ledfx-senders/compare/v0.4.0...v0.5.0) (2026-10-21)
+
+
+### Features
+
+* **build:** publish manylinux armv7l wheels for 32-bit Raspberry Pi OS ([#17](https://github.com/LedFx/ledfx-senders/issues/17)) ([770aab0](https://github.com/LedFx/ledfx-senders/commit/770aab08303e156fa1a1ae388808ca77c2fb16bd))
+
 ## [0.4.0](https://github.com/LedFx/ledfx-senders/compare/v0.3.1...v0.4.0) (2026-10-10)
 
 
