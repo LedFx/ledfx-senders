@@ -91,9 +91,10 @@ def test_native_oracle_prebuilds_debug_probe_before_protocols(tmp_path: Path) ->
         "CARGO_HOME": str(tmp_path / "cargo"),
         "RUSTUP_HOME": str(tmp_path / "rustup"),
         "CARGO_TARGET_DIR": str(tmp_path / "cold-target"),
-        "RUSTUP_TOOLCHAIN": "1.94.0",
     }
+    # The workflow must set these itself before the probe build.
     environment.pop("PYO3_PYTHON", None)
+    environment.pop("RUSTUP_TOOLCHAIN", None)
     for block, line in scripts:
         result = subprocess.run(
             ["bash", "-euo", "pipefail", "-c", textwrap.dedent(block) or line],
