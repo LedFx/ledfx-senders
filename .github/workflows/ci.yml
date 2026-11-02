@@ -193,12 +193,12 @@ jobs:
           else
             uv run --no-project --python 3.12 python ci/audit_native_wheels.py wheelhouse
           fi
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sender-wheel-${{ matrix.target }}
           path: wheelhouse/*.whl
           if-no-files-found: error
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sender-audit-${{ matrix.target }}
           path: wheelhouse/native-wheel-audit.json
@@ -360,7 +360,7 @@ jobs:
           pattern: sender-wheel-*
           path: sender-dist
           merge-multiple: true
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sender-dist
           path: sender-dist/
@@ -509,7 +509,7 @@ jobs:
           dist: dist
           snapshot: ${{ runner.temp }}/sender-release-snapshot.json
           wheel-plan: ${{ needs.plan.outputs.wheel-plan }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always() && steps.prepare.outcome == 'success'
         with:
           name: sender-provenance-${{ github.ref_name }}-${{ github.run_attempt }}
