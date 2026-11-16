@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.0](https://github.com/LedFx/ledfx-senders/compare/v0.4.0...v0.5.0) (2026-11-16)
+
+
+### Features
+
+* **build:** publish manylinux armv7l wheels for 32-bit Raspberry Pi OS ([#17](https://github.com/LedFx/ledfx-senders/issues/17)) ([770aab0](https://github.com/LedFx/ledfx-senders/commit/770aab08303e156fa1a1ae388808ca77c2fb16bd))
+
+
+### Bug Fixes
+
+* **deps:** update rust crate bytes to v1.12.1 ([#31](https://github.com/LedFx/ledfx-senders/issues/31)) ([cc22af0](https://github.com/LedFx/ledfx-senders/commit/cc22af0386ea62eafa2b44cc7413f397672895af))
+* **deps:** update rust crate rtc-crypto to v0.21.1 ([#32](https://github.com/LedFx/ledfx-senders/issues/32)) ([5f3c3fa](https://github.com/LedFx/ledfx-senders/commit/5f3c3fa9495319b66ed6a57784870b0f2195981e))
+
 ## [0.4.0](https://github.com/LedFx/ledfx-senders/compare/v0.3.1...v0.4.0) (2026-10-10)
 
 
