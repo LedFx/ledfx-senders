@@ -995,9 +995,9 @@ dependencies = [
 
 [[package]]
 name = "rtc-crypto"
-version = "0.21.0"
+version = "0.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc0aa6730d18cbc67b1de0430019f8e4545fd0fddba3c07f38dbbc675dc48829"
+checksum = "404ea28682271626739dfb1f3a04e96c596490b948d7629d9e4651dd4ba6aaf3"
 dependencies = [
  "aes",
  "ccm",
